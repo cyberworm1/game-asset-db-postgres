@@ -1,0 +1,15 @@
+# Node
+node_modules/
+services/asset_portal/node_modules/
+services/asset_portal/dist/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Environment
+.env
+*.local
+
+# macOS
+.DS_Store
