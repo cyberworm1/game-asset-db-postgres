@@ -1,7 +1,5 @@
--- Schema for Game Asset Management
--- Author: [Your Name]
--- Description: Defines tables for assets, versions, users, permissions, tags, and audit logs.
--- This ensures relational integrity and supports efficient querying for game dev workflows.
+-- Description: Defines tables for assets, versions, users, projects, permissions, tags, and audit logs.
+-- This ensures relational integrity and supports efficient querying for game dev workflows across multi-project studios.
 
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
@@ -13,6 +11,30 @@ BEGIN
     END IF;
 END $$;
 
+-- Enumerated type for project membership roles to provide a hierarchy of access.
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'project_role') THEN
+        CREATE TYPE project_role AS ENUM ('owner', 'manager', 'lead', 'contributor', 'reviewer', 'viewer');
+    END IF;
+END $$;
+
+-- Enumerated type for project lifecycle status.
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'project_status') THEN
+        CREATE TYPE project_status AS ENUM ('planning', 'active', 'on_hold', 'archived');
+    END IF;
+END $$;
+
+-- Enumerated type for review workflow state.
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'review_status') THEN
+        CREATE TYPE review_status AS ENUM ('pending', 'approved', 'changes_requested');
+    END IF;
+END $$;
+
 -- Users table: Stores user info with roles for access control.
 CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -21,12 +43,48 @@ CREATE TABLE IF NOT EXISTS users (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Projects table: Supports multi-project studio management.
+CREATE TABLE IF NOT EXISTS projects (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name VARCHAR(150) NOT NULL,
+    code VARCHAR(50) UNIQUE NOT NULL,
+    description TEXT,
+    status project_status DEFAULT 'planning',
+    storage_quota_tb NUMERIC(10,2) DEFAULT 10.00 CHECK (storage_quota_tb > 0), -- default studio allocation with ability to scale
+    storage_provider TEXT DEFAULT 'object-storage',
+    storage_location TEXT, -- e.g., bucket name or NAS path
+    archived_at TIMESTAMP,
+    archived_by UUID REFERENCES users(id),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+
+-- Track membership with explicit hierarchy per project.
+CREATE TABLE IF NOT EXISTS project_members (
+    project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role project_role NOT NULL,
+    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (project_id, user_id)
+);
+
+-- Storage telemetry snapshots per project to support scaling decisions.
+CREATE TABLE IF NOT EXISTS project_storage_snapshots (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    captured_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    asset_count BIGINT DEFAULT 0,
+    total_bytes BIGINT DEFAULT 0,
+    notes TEXT
+);
+
 -- Assets table: Core metadata storage. Uses JSONB for flexible ext. data.
 CREATE TABLE IF NOT EXISTS assets (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     name VARCHAR(255) NOT NULL,
     type VARCHAR(50) NOT NULL,  -- e.g., 'texture', 'model', 'audio'
     metadata JSONB,  -- e.g., {"size": 1024, "format": "png"}
+    project_id UUID NOT NULL REFERENCES projects(id) ON DELETE RESTRICT,
     created_by UUID REFERENCES users(id),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -45,8 +103,9 @@ CREATE TABLE IF NOT EXISTS asset_versions (
 -- Permissions: Row-level access control.
 CREATE TABLE IF NOT EXISTS permissions (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     asset_id UUID REFERENCES assets(id) ON DELETE CASCADE,
-    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     read BOOLEAN DEFAULT TRUE,
     write BOOLEAN DEFAULT FALSE,
     delete BOOLEAN DEFAULT FALSE
@@ -65,6 +124,17 @@ CREATE TABLE IF NOT EXISTS asset_tags (
     PRIMARY KEY (asset_id, tag_id)
 );
 
+-- Review workflow per asset version.
+CREATE TABLE IF NOT EXISTS asset_reviews (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    asset_version_id UUID REFERENCES asset_versions(id) ON DELETE CASCADE,
+    reviewer_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    status review_status DEFAULT 'pending',
+    comments TEXT,
+    reviewed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (asset_version_id, reviewer_id)
+);
+
 -- Audit Log: For tracking changes, crucial for compliance in title releases.
 CREATE TABLE IF NOT EXISTS audit_log (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -74,4 +144,13 @@ CREATE TABLE IF NOT EXISTS audit_log (
     new_row JSONB,
     executed_by TEXT,
     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Immutable archive log entries to record final project snapshots.
+CREATE TABLE IF NOT EXISTS project_archive_log (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    archived_by UUID REFERENCES users(id),
+    archived_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    summary JSONB
 );

@@ -1,10 +1,11 @@
 # Game Asset Management Database (Postgres)
 
-This repository provides a PostgreSQL-based database setup for managing game assets in a media/entertainment IT environment. It's tailored for games industry workflows, supporting asset metadata storage, versioning, and access controls to facilitate title releases. Use this to demonstrate expertise in database administration, schema design, and performance optimization.
+This repository provides a PostgreSQL-based database setup for managing game assets in a media/entertainment IT environment. It's tailored for games industry workflows across multi-project studios with 15-50 users, supporting asset metadata storage, versioning, hierarchical access, and immutable archiving to facilitate title releases. Use this to demonstrate expertise in database administration, schema design, and performance optimization.
 
 ## Features
-- **Schema Design**: Tables for assets, versions, users, permissions, and tags.
-- **Security**: Row-level security (RLS) and triggers for auditing.
+- **Schema Design**: Tables for projects, assets, versions, users, permissions, tags, and review workflows.
+- **Security**: Role hierarchies with project membership, row-level security (RLS), and triggers for auditing.
+- **Storage Planning**: Project storage snapshots to plan for the default 10TB allocation with room to scale.
 - **Setup**: Docker Compose for quick local deployment.
 - **Operations**: Backup/restore scripts.
 - **Tuning**: Guide for performance in high-load scenarios (e.g., during asset uploads for game builds).
@@ -23,16 +24,23 @@ This repository provides a PostgreSQL-based database setup for managing game ass
 6. Insert sample data: Run `psql -h localhost -U postgres -d asset_db -f init-db/04-sample-data.sql` if needed.
 
 ## Schema Overview
-- **assets**: Core table for asset metadata (id: UUID, name, type, metadata: JSONB).
-- **asset_versions**: Tracks versions with file paths (e.g., S3 links) and timestamps.
-- **users**: User accounts with roles (admin, editor, viewer).
-- **permissions**: Maps users to assets with read/write/delete flags.
+- **projects**: Studio projects with status tracking, storage allocation (10TB default), and immutable archive logging.
+- **project_members**: Associates users with projects using hierarchical roles (owner → manager → lead → contributor → reviewer → viewer).
+- **project_storage_snapshots**: Records asset counts and storage consumption to inform scaling.
+- **assets**: Core table for asset metadata scoped to projects (id: UUID, name, type, metadata: JSONB).
+- **asset_versions**: Tracks versions with file paths (e.g., S3 links) and timestamps; automatically created via triggers.
+- **asset_reviews**: Workflow table capturing review states per asset version.
+- **users**: User accounts with studio-level roles (admin, editor, viewer).
+- **permissions**: Maps users to projects/assets with read/write/delete flags while honoring project hierarchy.
 - **tags**: Many-to-many for categorizing assets (e.g., "texture", "model").
 - **audit_log**: Trigger-populated for changes.
+- **project_archive_log**: Immutable record of archived project summaries for compliance.
 
 ## Usage
 - Query assets: `SELECT * FROM assets WHERE tags @> ARRAY['texture'];`
-- Add asset: `INSERT INTO assets (name, type, metadata) VALUES ('hero_model', '3D', '{"size": 1024, "format": "obj"}');`
+- Add asset: `INSERT INTO assets (name, type, metadata, project_id) VALUES ('hero_model', '3D', '{"size": 1024, "format": "obj"}', '<project-uuid>');`
+- Capture storage telemetry: `INSERT INTO project_storage_snapshots (project_id, asset_count, total_bytes) VALUES ('<project-uuid>', 1500, 7340032000);`
+- Archive a project: `UPDATE projects SET status = 'archived', archived_by = '<user-uuid>' WHERE id = '<project-uuid>';`
 - For integration in game releases: Use this DB in CI/CD to validate asset versions before builds.
 
 ## Configuration
