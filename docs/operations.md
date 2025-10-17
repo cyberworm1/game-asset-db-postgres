@@ -11,6 +11,12 @@ This guide extends the base README with pragmatic procedures for operating the a
 | `pgadmin` | Web-based administration console for Postgres. |
 | `pgbackups` | Cron-like job that performs nightly logical backups (`pg_dump`). |
 
+## Depot Storage Layout
+
+- Asset payloads are written into a content-addressable store rooted under `ASSET_STORAGE_PATH` (default `/var/lib/asset-depot`).
+- Binary data is compressed and deduplicated by SHA-256, landing in `objects/<sha-prefix>/<sha>.bin.gz`. Pointer manifests are emitted per project in `refs/<project_id>/<timestamp>_<asset_id>.json` so restores know which logical asset references which physical blob.
+- Set `ASSET_STORAGE_REPLICA_PATH` to a mounted object store or NAS path to automatically mirror each object for off-host redundancy. Replica directories mirror the primary layout, allowing `rsync` or cloud lifecycle tooling to manage retention.
+
 ## Backups & PITR
 
 1. **Automated Dumps** – The `pgbackups` container writes timestamped dumps to `./backups`. Rotate via the `BACKUP_KEEP_*` variables.
@@ -59,6 +65,20 @@ Example cron entry:
 - Use the `scripts/restore.sh` helper in CI to ensure WAL archives replay successfully before expiring older backups.
 - Record restore outcomes in the ops wiki for auditing.
 
+## Automated Runbooks
+
+- Use `scripts/operations_automation.py` to orchestrate nightly maintenance. The script validates the newest logical backup with `pg_restore --list`, checks WAL archive freshness, pings the service health endpoint, and proxies `scripts/replica_health_check.sh`.
+- Example cron entry writing a JSON report:
+
+  ```
+  0 1 * * * /opt/game-asset-db/scripts/operations_automation.py \
+      --backup-dir /opt/game-asset-db/backups \
+      --archive-dir /opt/game-asset-db/backups/wal \
+      --replica-url "postgres://replica:secret@standby:5432/postgres" \
+      --output /var/log/game-asset-db/ops-report.json >>/var/log/game-asset-db/ops.log 2>&1
+  ```
+- Treat the JSON payload as an observability feed—ship it to Loki, Splunk, or Grafana Loki to mirror the integrated dashboards available in Helix Core.
+
 ## Disaster Recovery Checklist
 
 - [ ] Confirm last successful automated backup in `./backups`.
@@ -83,9 +103,12 @@ Example cron entry:
 - Pipeline automation should call `/changelists/{id}/submit` only after verifying that all items have passed validation, because the API enforces the target branch requirement and rejects empty bundles.
 - Branch integration tooling can record merges through `/branch-merges`; populate conflict details via `/branch-merges/{id}/conflicts` so production teams can track resolution history inside the database.
 - Periodically poll `/projects/{project_id}/branch-merges` to surface outstanding `pending` or `conflicted` merges in dashboards and ensure follow-up automation (e.g., automated resolve jobs) has context.
+- Queue orchestration tasks with `/branch-merges/{id}/jobs` and update them via `/merge-jobs/{job_id}`. Default merges include `auto_integrate`, `conflict_staging`, and optional `submit_gate` jobs that mirror Helix stream workflows.
+- A merge cannot transition to `merged` or set `completed_at` until submit-gate jobs report success (`status=completed` and `submit_gate_passed=true`) and all conflicts are resolved, ensuring content flows stay atomic.
 
 ## Future Enhancements
 
 - Add Prometheus/Grafana stack.
-- Integrate object storage (e.g., MinIO or S3) if local volume storage is insufficient.
+- Extend the merge job queue with worker automation (Celery/Arq) to execute `auto_integrate` runs server-side.
+- Expand object storage replication with lifecycle policies (e.g., S3 Intelligent-Tiering) for long-term archive hygiene.
 - Automate switchover with Patroni or repmgr for clustered deployments.

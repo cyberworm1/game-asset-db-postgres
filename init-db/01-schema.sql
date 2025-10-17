@@ -59,6 +59,14 @@ BEGIN
     END IF;
 END $$;
 
+-- Enumerated type for merge orchestration job lifecycle.
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'merge_job_status') THEN
+        CREATE TYPE merge_job_status AS ENUM ('queued', 'running', 'staged', 'completed', 'failed');
+    END IF;
+END $$;
+
 -- Users table: Stores user info with roles for access control.
 CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -226,6 +234,27 @@ CREATE TABLE IF NOT EXISTS merge_conflicts (
     resolved_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Merge jobs orchestrate integrate/resolve pipelines backing branch merges.
+CREATE TABLE IF NOT EXISTS merge_jobs (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    branch_merge_id UUID NOT NULL REFERENCES branch_merges(id) ON DELETE CASCADE,
+    job_type VARCHAR(64) NOT NULL,
+    status merge_job_status DEFAULT 'queued',
+    conflict_snapshot JSONB,
+    submit_gate_passed BOOLEAN DEFAULT FALSE,
+    logs TEXT,
+    started_at TIMESTAMP,
+    completed_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_merge_jobs_branch_merge_id
+    ON merge_jobs(branch_merge_id);
+
+CREATE INDEX IF NOT EXISTS idx_merge_jobs_status
+    ON merge_jobs(status);
 
 -- Workspace activity audit log for collaboration insights.
 CREATE TABLE IF NOT EXISTS workspace_activity (

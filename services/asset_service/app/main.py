@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -31,6 +32,9 @@ from .schemas import (
     MergeConflictCreate,
     MergeConflictResponse,
     MergeConflictUpdate,
+    MergeJobCreate,
+    MergeJobResponse,
+    MergeJobUpdate,
     PermissionCreate,
     PermissionResponse,
     PermissionUpdate,
@@ -50,6 +54,9 @@ from .storage import save_asset_file
 app = FastAPI(title="Asset Depot Service", version="1.0.0")
 
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+
+MERGE_JOB_STATUSES = {"queued", "running", "staged", "completed", "failed"}
+MERGE_JOB_TYPES = {"auto_integrate", "conflict_staging", "submit_gate"}
 
 
 def _normalize_metadata(raw: Any) -> dict:
@@ -179,6 +186,7 @@ def _branch_merge_row_to_response(row: Dict[str, Any]) -> BranchMergeResponse:
         notes=row.get("notes"),
         created_at=row["created_at"],
         completed_at=row.get("completed_at"),
+        updated_at=row["updated_at"],
     )
 
 
@@ -192,6 +200,88 @@ def _merge_conflict_row_to_response(row: Dict[str, Any]) -> MergeConflictRespons
         resolution=row.get("resolution"),
         resolved_at=row.get("resolved_at"),
     )
+
+
+def _merge_job_row_to_response(row: Dict[str, Any]) -> MergeJobResponse:
+    conflict_snapshot = row.get("conflict_snapshot")
+    if isinstance(conflict_snapshot, str):
+        try:
+            conflict_snapshot = json.loads(conflict_snapshot)
+        except json.JSONDecodeError:
+            conflict_snapshot = {"raw": conflict_snapshot}
+    return MergeJobResponse(
+        id=row["id"],
+        branch_merge_id=row["branch_merge_id"],
+        job_type=row["job_type"],
+        status=row["status"],
+        conflict_snapshot=conflict_snapshot,
+        submit_gate_passed=row.get("submit_gate_passed", False),
+        logs=row.get("logs"),
+        started_at=row.get("started_at"),
+        completed_at=row.get("completed_at"),
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def _enforce_submit_gate(conn, merge_id: UUID) -> None:
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            "SELECT COUNT(*) AS gate_jobs FROM merge_jobs WHERE branch_merge_id = %s AND job_type = 'submit_gate'",
+            (str(merge_id),),
+        )
+        gate_jobs_row = cur.fetchone()
+        if not gate_jobs_row or gate_jobs_row["gate_jobs"] == 0:
+            return
+
+        cur.execute(
+            """
+            SELECT COUNT(*) AS gate_passes
+            FROM merge_jobs
+            WHERE branch_merge_id = %s
+              AND submit_gate_passed IS TRUE
+              AND status = 'completed'
+            """,
+            (str(merge_id),),
+        )
+        gate_row = cur.fetchone()
+        if not gate_row or gate_row["gate_passes"] == 0:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Merge submit gate has not passed; ensure submit job completes successfully.",
+            )
+
+        cur.execute(
+            """
+            SELECT COUNT(*) AS outstanding
+            FROM merge_jobs
+            WHERE branch_merge_id = %s
+              AND status IN ('queued', 'running', 'staged')
+            """,
+            (str(merge_id),),
+        )
+        outstanding_row = cur.fetchone()
+        if outstanding_row and outstanding_row["outstanding"] > 0:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Merge jobs are still running; wait for orchestration to finish before completing the merge.",
+            )
+
+        cur.execute(
+            """
+            SELECT COUNT(*) AS unresolved
+            FROM merge_conflicts
+            WHERE branch_merge_id = %s
+              AND resolved_at IS NULL
+            """,
+            (str(merge_id),),
+        )
+        conflict_row = cur.fetchone()
+        if conflict_row and conflict_row["unresolved"] > 0:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Unresolved merge conflicts remain; resolve or stage them before completing the merge.",
+            )
 
 
 def _permission_row_to_response(row: Dict[str, Any]) -> PermissionResponse:
@@ -845,7 +935,7 @@ def list_branch_merges(project_id: UUID, current_user: dict = Depends(get_curren
                 cur.execute(
                     """
                     SELECT id, project_id, source_branch_id, target_branch_id, initiated_by, status,
-                           conflict_summary, notes, created_at, completed_at
+                           conflict_summary, notes, created_at, completed_at, updated_at
                     FROM branch_merges
                     WHERE project_id = %s
                     ORDER BY created_at DESC
@@ -890,7 +980,7 @@ def create_branch_merge(payload: BranchMergeCreate, current_user: dict = Depends
                     INSERT INTO branch_merges (project_id, source_branch_id, target_branch_id, initiated_by, notes)
                     VALUES (%s, %s, %s, %s, %s)
                     RETURNING id, project_id, source_branch_id, target_branch_id, initiated_by, status,
-                              conflict_summary, notes, created_at, completed_at
+                              conflict_summary, notes, created_at, completed_at, updated_at
                     """,
                     (
                         str(payload.project_id),
@@ -901,8 +991,47 @@ def create_branch_merge(payload: BranchMergeCreate, current_user: dict = Depends
                     ),
                 )
                 merge = cur.fetchone()
+                if not merge:
+                    raise HTTPException(status_code=500, detail="Failed to create branch merge")
+
+                merge_id = merge["id"]
+                if payload.auto_integrate:
+                    cur.execute(
+                        """
+                        INSERT INTO merge_jobs (branch_merge_id, job_type)
+                        VALUES (%s, %s)
+                        """,
+                        (str(merge_id), "auto_integrate"),
+                    )
+                if payload.stage_conflicts:
+                    cur.execute(
+                        """
+                        INSERT INTO merge_jobs (branch_merge_id, job_type, status)
+                        VALUES (%s, %s, %s)
+                        """,
+                        (str(merge_id), "conflict_staging", "staged"),
+                    )
+                if payload.requires_submit_gate:
+                    cur.execute(
+                        """
+                        INSERT INTO merge_jobs (branch_merge_id, job_type)
+                        VALUES (%s, %s)
+                        """,
+                        (str(merge_id), "submit_gate"),
+                    )
+
+                cur.execute(
+                    """
+                    SELECT id, project_id, source_branch_id, target_branch_id, initiated_by, status,
+                           conflict_summary, notes, created_at, completed_at, updated_at
+                    FROM branch_merges
+                    WHERE id = %s
+                    """,
+                    (str(merge_id),),
+                )
+                merge_row = cur.fetchone()
                 conn.commit()
-                return _branch_merge_row_to_response(merge)
+                return _branch_merge_row_to_response(merge_row)
         except HTTPException:
             conn.rollback()
             raise
@@ -915,11 +1044,16 @@ def create_branch_merge(payload: BranchMergeCreate, current_user: dict = Depends
 def update_branch_merge(merge_id: UUID, payload: BranchMergeUpdate, current_user: dict = Depends(get_current_user)):
     set_clauses: List[str] = []
     params: List[Any] = []
+    needs_submit_gate = False
+    mark_complete_on_merge = False
     if payload.status is not None:
         if payload.status not in ("pending", "merged", "conflicted", "cancelled"):
             raise HTTPException(status_code=400, detail="Invalid merge status")
         set_clauses.append("status = %s")
         params.append(payload.status)
+        if payload.status == "merged":
+            needs_submit_gate = True
+            mark_complete_on_merge = True
     if payload.conflict_summary is not None:
         set_clauses.append("conflict_summary = %s")
         if isinstance(payload.conflict_summary, (dict, list)):
@@ -932,6 +1066,7 @@ def update_branch_merge(merge_id: UUID, payload: BranchMergeUpdate, current_user
     if payload.completed is not None:
         if payload.completed:
             set_clauses.append("completed_at = NOW()")
+            needs_submit_gate = True
         else:
             set_clauses.append("completed_at = NULL")
     if not set_clauses:
@@ -940,12 +1075,16 @@ def update_branch_merge(merge_id: UUID, payload: BranchMergeUpdate, current_user
     with get_connection() as conn:
         try:
             set_rls_user(conn, current_user["id"])
+            if needs_submit_gate:
+                _enforce_submit_gate(conn, merge_id)
             with conn.cursor(row_factory=dict_row) as cur:
+                if mark_complete_on_merge and not any("completed_at" in clause for clause in set_clauses):
+                    set_clauses.append("completed_at = NOW()")
                 set_clauses.append("updated_at = NOW()")
                 query = (
                     "UPDATE branch_merges SET "
                     + ", ".join(set_clauses)
-                    + " WHERE id = %s RETURNING id, project_id, source_branch_id, target_branch_id, initiated_by, status, conflict_summary, notes, created_at, completed_at"
+                    + " WHERE id = %s RETURNING id, project_id, source_branch_id, target_branch_id, initiated_by, status, conflict_summary, notes, created_at, completed_at, updated_at"
                 )
                 params.append(str(merge_id))
                 cur.execute(query, params)
@@ -1069,6 +1208,163 @@ def update_merge_conflict(
                     raise HTTPException(status_code=404, detail="Merge conflict not found")
                 conn.commit()
                 return _merge_conflict_row_to_response(row)
+        except HTTPException:
+            conn.rollback()
+            raise
+        except Exception as exc:
+            conn.rollback()
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.get(
+    "/branch-merges/{merge_id}/jobs",
+    response_model=List[MergeJobResponse],
+    tags=["branch-merges"],
+)
+def list_merge_jobs(merge_id: UUID, current_user: dict = Depends(get_current_user)):
+    with get_connection() as conn:
+        try:
+            set_rls_user(conn, current_user["id"])
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    """
+                    SELECT id, branch_merge_id, job_type, status, conflict_snapshot, submit_gate_passed,
+                           logs, started_at, completed_at, created_at, updated_at
+                    FROM merge_jobs
+                    WHERE branch_merge_id = %s
+                    ORDER BY created_at
+                    """,
+                    (str(merge_id),),
+                )
+                rows = cur.fetchall()
+                return [_merge_job_row_to_response(row) for row in rows]
+        except HTTPException:
+            conn.rollback()
+            raise
+        except Exception as exc:
+            conn.rollback()
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post(
+    "/branch-merges/{merge_id}/jobs",
+    response_model=MergeJobResponse,
+    status_code=status.HTTP_201_CREATED,
+    tags=["branch-merges"],
+)
+def create_merge_job(merge_id: UUID, payload: MergeJobCreate, current_user: dict = Depends(get_current_user)):
+    if payload.job_type not in MERGE_JOB_TYPES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported merge job type")
+    job_status = payload.status or "queued"
+    if job_status not in MERGE_JOB_STATUSES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported merge job status")
+
+    conflict_snapshot_value = None
+    if payload.conflict_snapshot is not None:
+        conflict_snapshot_value = json.dumps(payload.conflict_snapshot)
+
+    started_at = None
+    completed_at = None
+    if job_status in {"running", "staged", "completed", "failed"}:
+        started_at = datetime.utcnow()
+    if job_status in {"completed", "failed"}:
+        completed_at = datetime.utcnow()
+
+    submit_gate_passed = payload.submit_gate_passed if payload.job_type == "submit_gate" else False
+
+    with get_connection() as conn:
+        try:
+            set_rls_user(conn, current_user["id"])
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute("SELECT id FROM branch_merges WHERE id = %s", (str(merge_id),))
+                branch_merge = cur.fetchone()
+                if not branch_merge:
+                    raise HTTPException(status_code=404, detail="Branch merge not found")
+
+                cur.execute(
+                    """
+                    INSERT INTO merge_jobs (branch_merge_id, job_type, status, conflict_snapshot, submit_gate_passed, logs, started_at, completed_at)
+                    VALUES (%s, %s, %s, %s::jsonb, %s, %s, %s, %s)
+                    RETURNING id, branch_merge_id, job_type, status, conflict_snapshot, submit_gate_passed,
+                              logs, started_at, completed_at, created_at, updated_at
+                    """,
+                    (
+                        str(merge_id),
+                        payload.job_type,
+                        job_status,
+                        conflict_snapshot_value,
+                        submit_gate_passed,
+                        payload.logs,
+                        started_at,
+                        completed_at,
+                    ),
+                )
+                row = cur.fetchone()
+                conn.commit()
+                return _merge_job_row_to_response(row)
+        except HTTPException:
+            conn.rollback()
+            raise
+        except Exception as exc:
+            conn.rollback()
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.patch("/merge-jobs/{job_id}", response_model=MergeJobResponse, tags=["branch-merges"])
+def update_merge_job(job_id: UUID, payload: MergeJobUpdate, current_user: dict = Depends(get_current_user)):
+    updates: List[str] = []
+    params: List[Any] = []
+    new_status: Optional[str] = None
+    if payload.status is not None:
+        if payload.status not in MERGE_JOB_STATUSES:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported merge job status")
+        updates.append("status = %s")
+        params.append(payload.status)
+        new_status = payload.status
+    if payload.conflict_snapshot is not None:
+        updates.append("conflict_snapshot = %s::jsonb")
+        params.append(json.dumps(payload.conflict_snapshot))
+    if payload.submit_gate_passed is not None:
+        updates.append("submit_gate_passed = %s")
+        params.append(payload.submit_gate_passed)
+    if payload.logs is not None:
+        updates.append("logs = %s")
+        params.append(payload.logs)
+    if not updates:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No fields provided")
+
+    with get_connection() as conn:
+        try:
+            set_rls_user(conn, current_user["id"])
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    "SELECT id, branch_merge_id, job_type FROM merge_jobs WHERE id = %s",
+                    (str(job_id),),
+                )
+                job_row = cur.fetchone()
+                if not job_row:
+                    raise HTTPException(status_code=404, detail="Merge job not found")
+                if payload.submit_gate_passed and job_row["job_type"] != "submit_gate":
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Only submit gate jobs can be marked as passing the submit gate.",
+                    )
+
+                if new_status in {"running", "staged"}:
+                    updates.append("started_at = COALESCE(started_at, NOW())")
+                if new_status in {"completed", "failed"}:
+                    updates.append("started_at = COALESCE(started_at, NOW())")
+                    updates.append("completed_at = NOW()")
+
+                updates.append("updated_at = NOW()")
+                query = "UPDATE merge_jobs SET " + ", ".join(updates) + " WHERE id = %s RETURNING id, branch_merge_id, job_type, status, conflict_snapshot, submit_gate_passed, logs, started_at, completed_at, created_at, updated_at"
+                params.append(str(job_id))
+                cur.execute(query, params)
+                row = cur.fetchone()
+                if not row:
+                    raise HTTPException(status_code=404, detail="Merge job not found")
+                conn.commit()
+                return _merge_job_row_to_response(row)
         except HTTPException:
             conn.rollback()
             raise

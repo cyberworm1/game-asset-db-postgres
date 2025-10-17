@@ -169,6 +169,9 @@ class BranchMergeCreate(BaseModel):
     source_branch_id: UUID
     target_branch_id: UUID
     notes: Optional[str]
+    auto_integrate: bool = True
+    stage_conflicts: bool = True
+    requires_submit_gate: bool = True
 
 
 class BranchMergeResponse(BaseModel):
@@ -182,6 +185,7 @@ class BranchMergeResponse(BaseModel):
     notes: Optional[str]
     created_at: datetime
     completed_at: Optional[datetime]
+    updated_at: datetime
 
 
 class BranchMergeUpdate(BaseModel):
@@ -210,6 +214,35 @@ class MergeConflictResponse(BaseModel):
     description: Optional[str]
     resolution: Optional[str]
     resolved_at: Optional[datetime]
+
+
+class MergeJobCreate(BaseModel):
+    job_type: str
+    status: Optional[str] = None
+    conflict_snapshot: Optional[dict]
+    submit_gate_passed: bool = False
+    logs: Optional[str]
+
+
+class MergeJobUpdate(BaseModel):
+    status: Optional[str]
+    conflict_snapshot: Optional[dict]
+    submit_gate_passed: Optional[bool]
+    logs: Optional[str]
+
+
+class MergeJobResponse(BaseModel):
+    id: UUID
+    branch_merge_id: UUID
+    job_type: str
+    status: str
+    conflict_snapshot: Optional[dict]
+    submit_gate_passed: bool
+    logs: Optional[str]
+    started_at: Optional[datetime]
+    completed_at: Optional[datetime]
+    created_at: datetime
+    updated_at: datetime
 
 
 class PermissionBase(BaseModel):
