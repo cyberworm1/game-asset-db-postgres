@@ -1,0 +1,7 @@
+{
+  "name": "GameAssetDb.Editor",
+  "references": [],
+  "includePlatforms": ["Editor"],
+  "autoReferenced": true,
+  "overrideReferences": false
+}
