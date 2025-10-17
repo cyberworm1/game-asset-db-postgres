@@ -7,6 +7,7 @@ This repository provides a PostgreSQL-based database and service stack for manag
 - **Security**: Session-aware row-level security (RLS) policies with helper functions so every request is enforced in-database.
 - **Binary Depot Service**: A FastAPI-powered application server that exposes REST APIs, file upload endpoints, and a lightweight web review dashboard backed by a persistent storage volume.
 - **Branching & Workspaces**: Branch, workspace, shelf, and asset locking semantics inspired by Helix stream/workspace flows.
+- **Admin & Branch APIs**: FastAPI endpoints now cover project provisioning, branch/shelf management, and permission administration so Helix-equivalent concepts live beyond raw SQL tables.
 - **Storage Planning**: Project storage snapshots to plan for the default 10TB allocation with room to scale.
 - **Operations**: Docker Compose adds scheduled backups, pgAdmin for administration, and scripts for replication & disaster recovery runbooks.
 - **Tuning**: Guide for performance in high-load scenarios (e.g., during asset uploads for game builds).

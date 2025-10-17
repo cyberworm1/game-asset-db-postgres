@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
+from pathlib import Path
 from typing import List
 
 from plugins.common import cache_directory
@@ -53,7 +55,9 @@ class AssetBrowserDialog(QtWidgets.QDialog):  # type: ignore[misc]
         items: List[dict] = response.get("items", [])
         self.asset_list.clear()  # type: ignore[union-attr]
         for item in items:
-            display = f"{item.get('name')} (v{item.get('version')})"
+            versions = item.get("versions", []) or []
+            latest_version = versions[-1]["version_number"] if versions else "-"
+            display = f"{item.get('name')} (v{latest_version})"
             list_item = QtWidgets.QListWidgetItem(display)  # type: ignore[call-arg]
             list_item.setData(32, item.get("id"))
             self.asset_list.addItem(list_item)  # type: ignore[union-attr]
@@ -67,8 +71,12 @@ class AssetBrowserDialog(QtWidgets.QDialog):  # type: ignore[misc]
         asset_id = selected_items[0].data(32)
         client = ensure_authenticated_client()
         payload = client.import_asset(asset_id)
-        cache_directory()  # ensure cache exists for downloaded files
-        LOGGER.info("Triggered Maya import for asset %s -> %s", asset_id, payload)
+        cache_dir = cache_directory()
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        asset_name = payload.get("name") or asset_id
+        cache_path = Path(cache_dir) / f"{asset_name}_metadata.json"
+        cache_path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+        LOGGER.info("Cached metadata for asset %s at %s", asset_id, cache_path)
 
 
 def maya_main_window():  # pragma: no cover - Maya specific

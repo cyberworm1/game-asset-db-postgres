@@ -11,7 +11,7 @@ The `common` package provides utilities for reading plugin configuration, authen
 - Autodesk Maya (Python module package)
 - Adobe Illustrator (UXP extension)
 - Blender (Python add-on)
-- Unity Editor (C# package)
+- Unity Editor (C# package) – authenticates via `/auth/token`, lists project-scoped assets, and writes imported metadata to `Assets/GameAssetDb/`.
 - Adobe Photoshop (UXP extension)
 - Adobe Substance 3D Painter/Designer (Python/JavaScript scripts)
 - Autodesk 3ds Max (Python/MaxScript hybrid)
