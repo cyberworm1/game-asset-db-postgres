@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Asset Reviews</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 2rem; background-color: #f4f5f7; }
+        h1 { color: #24292e; }
+        table { border-collapse: collapse; width: 100%; background: #fff; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        th, td { padding: 0.75rem; border-bottom: 1px solid #e1e4e8; text-align: left; }
+        th { background: #f0f3f5; text-transform: uppercase; font-size: 0.75rem; letter-spacing: 0.05em; }
+        tr:hover { background: #f9fafb; }
+        .status { padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.85rem; display: inline-block; }
+        .status.pending { background: #fff3cd; color: #856404; }
+        .status.approved { background: #d4edda; color: #155724; }
+        .status.changes_requested { background: #f8d7da; color: #721c24; }
+    </style>
+</head>
+<body>
+    <h1>Review Dashboard</h1>
+    <p>Signed in as <strong>{{ username }}</strong></p>
+    <table>
+        <thead>
+            <tr>
+                <th>Asset</th>
+                <th>Version</th>
+                <th>Status</th>
+                <th>Reviewer</th>
+                <th>Comments</th>
+                <th>Last Updated</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for review in reviews %}
+            <tr>
+                <td>{{ review.asset_name }}</td>
+                <td>v{{ review.version_number }}</td>
+                <td><span class="status {{ review.status }}">{{ review.status.replace('_', ' ').title() }}</span></td>
+                <td>{{ review.reviewer or 'Unassigned' }}</td>
+                <td>{{ review.comments or '—' }}</td>
+                <td>{{ review.reviewed_at }}</td>
+            </tr>
+            {% else %}
+            <tr>
+                <td colspan="6">No reviews found.</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</body>
+</html>
