@@ -1,0 +1,32 @@
+---
+# Base Setup Tasks
+# Author: [Your Name]
+# Description: Handles initial server configuration for reliability in game IT environments.
+
+- name: Update apt cache
+  apt:
+    update_cache: yes
+    cache_valid_time: 3600
+
+- name: Install essential packages
+  apt:
+    name:
+      - vim
+      - git
+      - htop
+      - net-tools
+    state: present
+
+- name: Set hostname
+  hostname:
+    name: "{{ inventory_hostname }}"
+
+- name: Set timezone
+  timezone:
+    name: "{{ timezone | default('UTC') }}"
+
+- name: Configure MOTD
+  template:
+    src: motd.j2
+    dest: /etc/motd
+    mode: '0644'
