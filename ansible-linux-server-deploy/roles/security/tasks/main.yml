@@ -1,0 +1,35 @@
+---
+# Security Tasks
+# Author: [Your Name]
+# Description: Hardens server for secure operation in production game releases.
+
+- name: Install security packages
+  apt:
+    name:
+      - ufw
+      - fail2ban
+    state: present
+
+- name: Allow essential ports before enabling UFW
+  ufw:
+    rule: allow
+    port: "{{ item }}"
+  loop: "{{ ufw_allowed_ports }}"
+
+- name: Enable UFW with default deny
+  ufw:
+    state: enabled
+    policy: deny
+
+- name: Harden SSH root login
+  lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^PermitRootLogin'
+    line: 'PermitRootLogin no'
+  notify: Restart SSH
+
+- name: Ensure fail2ban is running
+  service:
+    name: fail2ban
+    state: started
+    enabled: yes

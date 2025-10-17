@@ -1,0 +1,11 @@
+---
+# Main Playbook for Linux Server Deployment
+# Author: [Your Name]
+# Description: Orchestrates roles for full server provisioning. Run on gameservers group for title support.
+
+- hosts: gameservers
+  become: yes
+  roles:
+    - base-setup
+    - security
+    - monitoring

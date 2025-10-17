@@ -1,0 +1,15 @@
+---
+# Monitoring Tasks
+# Author: [Your Name]
+# Description: Sets up basic monitoring for performance tracking in game servers.
+
+- name: Install Prometheus node exporter
+  apt:
+    name: prometheus-node-exporter
+    state: present
+
+- name: Ensure node exporter is running
+  service:
+    name: prometheus-node-exporter
+    state: started
+    enabled: yes
