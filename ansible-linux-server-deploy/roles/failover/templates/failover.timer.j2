@@ -1,0 +1,10 @@
+[Unit]
+Description=Periodic automated failover probe
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec={{ failover_timer_interval }}
+Persistent=true
+
+[Install]
+WantedBy=timers.target

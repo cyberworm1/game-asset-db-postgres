@@ -36,6 +36,7 @@ fi
 
 THRESHOLD=${REPLAY_LAG_THRESHOLD_SECONDS:-120}
 LOGGER_PATH=${LOGGER_PATH:-}
+PROM_METRICS_PATH=${PROMETHEUS_TEXTFILE:-}
 TIMESTAMP=$(date --iso-8601=seconds)
 
 read -r -d '' SQL <<'SQL'
@@ -82,6 +83,26 @@ if (( REPLAY_LAG_SECONDS_INT > THRESHOLD )); then
 fi
 
 echo "$MESSAGE"
+
+if [[ -n $PROM_METRICS_PATH ]]; then
+    mkdir -p "$(dirname "$PROM_METRICS_PATH")"
+    STATUS_VALUE=0
+    if [[ $STATUS == "healthy" ]]; then
+        STATUS_VALUE=1
+    fi
+    SAFE_TARGET=$(echo "$CONN_URL" | tr -c 'a-zA-Z0-9_' '_')
+    cat <<EOF >"$PROM_METRICS_PATH"
+# HELP asset_depot_replica_health_status 1 indicates a healthy replica
+# TYPE asset_depot_replica_health_status gauge
+asset_depot_replica_health_status{instance="$SAFE_TARGET"} $STATUS_VALUE
+# HELP asset_depot_replica_replay_lag_seconds Current WAL replay lag seconds reported by the replica
+# TYPE asset_depot_replica_replay_lag_seconds gauge
+asset_depot_replica_replay_lag_seconds{instance="$SAFE_TARGET"} ${REPLAY_LAG_SECONDS_INT:-0}
+# HELP asset_depot_replica_receive_lag_seconds Current WAL receive lag seconds reported by the replica
+# TYPE asset_depot_replica_receive_lag_seconds gauge
+asset_depot_replica_receive_lag_seconds{instance="$SAFE_TARGET"} ${RECEIVE_LAG_SECONDS:-0}
+EOF
+fi
 
 if [[ -n $LOGGER_PATH ]]; then
     printf "{\"timestamp\":\"%s\",\"level\":\"info\",\"status\":\"%s\",\"receive_lsn\":\"%s\",\"replay_lsn\":\"%s\",\"replay_lag_seconds\":%s,\"receive_lag_seconds\":%s}\\n" \

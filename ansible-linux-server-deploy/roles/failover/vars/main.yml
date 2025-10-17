@@ -1,0 +1,7 @@
+---
+failover_dsn: "postgresql://repmgr@localhost:5432/postgres"
+failover_repmgr_bin: "/usr/bin/repmgr"
+failover_health_attempts: 3
+failover_health_interval: 5
+failover_post_promote_follow: true
+failover_timer_interval: 30
