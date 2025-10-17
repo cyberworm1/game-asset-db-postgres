@@ -35,6 +35,30 @@ BEGIN
     END IF;
 END $$;
 
+-- Enumerated type for changelist lifecycle state.
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'changelist_status') THEN
+        CREATE TYPE changelist_status AS ENUM ('open', 'pending_review', 'submitted', 'abandoned');
+    END IF;
+END $$;
+
+-- Enumerated type for changelist actions against individual assets.
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'changelist_action') THEN
+        CREATE TYPE changelist_action AS ENUM ('add', 'edit', 'delete', 'integrate');
+    END IF;
+END $$;
+
+-- Enumerated type for merge job tracking between branches.
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'merge_status') THEN
+        CREATE TYPE merge_status AS ENUM ('pending', 'merged', 'conflicted', 'cancelled');
+    END IF;
+END $$;
+
 -- Users table: Stores user info with roles for access control.
 CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -127,6 +151,32 @@ CREATE TABLE IF NOT EXISTS workspaces (
     UNIQUE (project_id, user_id, name)
 );
 
+-- Changelists capture atomic groupings of asset versions for submit/shelve flows.
+CREATE TABLE IF NOT EXISTS changelists (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    workspace_id UUID REFERENCES workspaces(id) ON DELETE SET NULL,
+    created_by UUID NOT NULL REFERENCES users(id) ON DELETE SET NULL,
+    target_branch_id UUID REFERENCES branches(id) ON DELETE SET NULL,
+    status changelist_status DEFAULT 'open',
+    description TEXT,
+    submitter_notes TEXT,
+    submitted_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Changelist items link asset versions and intended actions to a changelist envelope.
+CREATE TABLE IF NOT EXISTS changelist_items (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    changelist_id UUID NOT NULL REFERENCES changelists(id) ON DELETE CASCADE,
+    asset_version_id UUID NOT NULL REFERENCES asset_versions(id) ON DELETE CASCADE,
+    action changelist_action NOT NULL DEFAULT 'edit',
+    target_branch_id UUID REFERENCES branches(id) ON DELETE SET NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (changelist_id, asset_version_id)
+);
+
 -- File locking for binary assets.
 CREATE TABLE IF NOT EXISTS asset_locks (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -144,9 +194,37 @@ CREATE TABLE IF NOT EXISTS shelves (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
     asset_version_id UUID NOT NULL REFERENCES asset_versions(id) ON DELETE CASCADE,
+    changelist_id UUID REFERENCES changelists(id) ON DELETE SET NULL,
     created_by UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     description TEXT
+);
+
+-- Branch merge jobs track integrates between branches along with conflict status.
+CREATE TABLE IF NOT EXISTS branch_merges (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    source_branch_id UUID NOT NULL REFERENCES branches(id) ON DELETE CASCADE,
+    target_branch_id UUID NOT NULL REFERENCES branches(id) ON DELETE CASCADE,
+    initiated_by UUID NOT NULL REFERENCES users(id) ON DELETE SET NULL,
+    status merge_status DEFAULT 'pending',
+    conflict_summary JSONB,
+    notes TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Merge conflicts capture per-asset remediation needs for branch merges.
+CREATE TABLE IF NOT EXISTS merge_conflicts (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    branch_merge_id UUID NOT NULL REFERENCES branch_merges(id) ON DELETE CASCADE,
+    asset_id UUID REFERENCES assets(id) ON DELETE SET NULL,
+    asset_version_id UUID REFERENCES asset_versions(id) ON DELETE SET NULL,
+    description TEXT,
+    resolution TEXT,
+    resolved_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Workspace activity audit log for collaboration insights.

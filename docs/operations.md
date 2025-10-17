@@ -77,6 +77,13 @@ Example cron entry:
 - Application components must call `SELECT set_app_user('<uuid>')` at the start of each request to satisfy RLS.
 - pgAdmin connections bypass RLS; restrict to admin users only.
 
+## Changelist & Merge Runbook
+
+- Use the new `/changelists` endpoints to create atomic submissions that bundle multiple asset versions from a workspace. Shelves can be linked to a changelist to keep QA staging aligned with the bundle.
+- Pipeline automation should call `/changelists/{id}/submit` only after verifying that all items have passed validation, because the API enforces the target branch requirement and rejects empty bundles.
+- Branch integration tooling can record merges through `/branch-merges`; populate conflict details via `/branch-merges/{id}/conflicts` so production teams can track resolution history inside the database.
+- Periodically poll `/projects/{project_id}/branch-merges` to surface outstanding `pending` or `conflicted` merges in dashboards and ensure follow-up automation (e.g., automated resolve jobs) has context.
+
 ## Future Enhancements
 
 - Add Prometheus/Grafana stack.

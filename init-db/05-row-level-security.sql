@@ -206,6 +206,79 @@ CREATE POLICY asset_locks_manage ON asset_locks
         OR locked_by = current_app_user()
     );
 
+ALTER TABLE changelists ENABLE ROW LEVEL SECURITY;
+CREATE POLICY changelists_visibility ON changelists
+    FOR SELECT USING (
+        current_app_user_role() = 'admin'
+        OR is_project_member(project_id)
+        OR created_by = current_app_user()
+    );
+CREATE POLICY changelists_manage ON changelists
+    FOR ALL USING (
+        current_app_user_role() = 'admin'
+        OR created_by = current_app_user()
+        OR EXISTS (
+            SELECT 1 FROM project_members pm
+            WHERE pm.project_id = changelists.project_id
+              AND pm.user_id = current_app_user()
+              AND pm.role IN ('owner','manager','lead','contributor')
+        )
+    )
+    WITH CHECK (
+        current_app_user_role() = 'admin'
+        OR created_by = current_app_user()
+        OR EXISTS (
+            SELECT 1 FROM project_members pm
+            WHERE pm.project_id = changelists.project_id
+              AND pm.user_id = current_app_user()
+              AND pm.role IN ('owner','manager','lead','contributor')
+        )
+    );
+
+ALTER TABLE changelist_items ENABLE ROW LEVEL SECURITY;
+CREATE POLICY changelist_items_visibility ON changelist_items
+    FOR SELECT USING (
+        current_app_user_role() = 'admin'
+        OR EXISTS (
+            SELECT 1 FROM changelists c
+            WHERE c.id = changelist_items.changelist_id
+              AND (c.created_by = current_app_user() OR is_project_member(c.project_id))
+        )
+    );
+CREATE POLICY changelist_items_manage ON changelist_items
+    FOR ALL USING (
+        current_app_user_role() = 'admin'
+        OR EXISTS (
+            SELECT 1 FROM changelists c
+            WHERE c.id = changelist_items.changelist_id
+              AND (
+                    c.created_by = current_app_user()
+                    OR EXISTS (
+                        SELECT 1 FROM project_members pm
+                        WHERE pm.project_id = c.project_id
+                          AND pm.user_id = current_app_user()
+                          AND pm.role IN ('owner','manager','lead','contributor')
+                    )
+                )
+        )
+    )
+    WITH CHECK (
+        current_app_user_role() = 'admin'
+        OR EXISTS (
+            SELECT 1 FROM changelists c
+            WHERE c.id = changelist_items.changelist_id
+              AND (
+                    c.created_by = current_app_user()
+                    OR EXISTS (
+                        SELECT 1 FROM project_members pm
+                        WHERE pm.project_id = c.project_id
+                          AND pm.user_id = current_app_user()
+                          AND pm.role IN ('owner','manager','lead','contributor')
+                    )
+                )
+        )
+    );
+
 ALTER TABLE shelves ENABLE ROW LEVEL SECURITY;
 CREATE POLICY shelves_visibility ON shelves
     FOR SELECT USING (
@@ -221,6 +294,60 @@ CREATE POLICY shelves_manage ON shelves
     )
     WITH CHECK (
         current_app_user_role() = 'admin' OR created_by = current_app_user()
+    );
+
+ALTER TABLE branch_merges ENABLE ROW LEVEL SECURITY;
+CREATE POLICY branch_merges_visibility ON branch_merges
+    FOR SELECT USING (
+        current_app_user_role() = 'admin'
+        OR is_project_member(project_id)
+    );
+CREATE POLICY branch_merges_manage ON branch_merges
+    FOR ALL USING (
+        current_app_user_role() = 'admin'
+        OR EXISTS (
+            SELECT 1 FROM project_members pm
+            WHERE pm.project_id = branch_merges.project_id
+              AND pm.user_id = current_app_user()
+              AND pm.role IN ('owner','manager','lead')
+        )
+    )
+    WITH CHECK (
+        current_app_user_role() = 'admin'
+        OR EXISTS (
+            SELECT 1 FROM project_members pm
+            WHERE pm.project_id = branch_merges.project_id
+              AND pm.user_id = current_app_user()
+              AND pm.role IN ('owner','manager','lead')
+        )
+    );
+
+ALTER TABLE merge_conflicts ENABLE ROW LEVEL SECURITY;
+CREATE POLICY merge_conflicts_visibility ON merge_conflicts
+    FOR SELECT USING (
+        current_app_user_role() = 'admin'
+        OR EXISTS (
+            SELECT 1 FROM branch_merges bm
+            WHERE bm.id = merge_conflicts.branch_merge_id
+              AND (bm.initiated_by = current_app_user() OR is_project_member(bm.project_id))
+        )
+    );
+CREATE POLICY merge_conflicts_manage ON merge_conflicts
+    FOR ALL USING (
+        current_app_user_role() = 'admin'
+        OR EXISTS (
+            SELECT 1 FROM branch_merges bm
+            WHERE bm.id = merge_conflicts.branch_merge_id
+              AND (bm.initiated_by = current_app_user() OR is_project_member(bm.project_id))
+        )
+    )
+    WITH CHECK (
+        current_app_user_role() = 'admin'
+        OR EXISTS (
+            SELECT 1 FROM branch_merges bm
+            WHERE bm.id = merge_conflicts.branch_merge_id
+              AND (bm.initiated_by = current_app_user() OR is_project_member(bm.project_id))
+        )
     );
 
 ALTER TABLE workspace_activity ENABLE ROW LEVEL SECURITY;

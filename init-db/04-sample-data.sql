@@ -49,6 +49,15 @@ VALUES (
     (SELECT id FROM users WHERE username = 'admin_user')
 );
 
+INSERT INTO branches (project_id, name, description, parent_branch_id, created_by)
+VALUES (
+    (SELECT id FROM projects WHERE code = 'MYTHIC'),
+    'dev_art',
+    'Feature development stream for art polish',
+    (SELECT id FROM branches WHERE name = 'main' AND project_id = (SELECT id FROM projects WHERE code = 'MYTHIC')),
+    (SELECT id FROM users WHERE username = 'lead_artist')
+);
+
 INSERT INTO tags (name) VALUES ('texture'), ('model');
 
 INSERT INTO assets (name, type, metadata, project_id, created_by)
@@ -73,6 +82,15 @@ VALUES (
     (SELECT id FROM branches WHERE name = 'main' AND project_id = (SELECT id FROM projects WHERE code = 'MYTHIC')),
     'depot://hero_texture_v1.png',
     'Initial ingest of hero texture for milestone alpha.'
+);
+
+INSERT INTO asset_versions (asset_id, version_number, branch_id, file_path, notes)
+VALUES (
+    (SELECT id FROM assets WHERE name = 'hero_texture'),
+    2,
+    (SELECT id FROM branches WHERE name = 'dev_art' AND project_id = (SELECT id FROM projects WHERE code = 'MYTHIC')),
+    'depot://hero_texture_v2_polish.png',
+    'Polish pass with improved roughness map.'
 );
 
 INSERT INTO project_storage_snapshots (project_id, asset_count, total_bytes, notes)
@@ -112,6 +130,22 @@ VALUES (
     CURRENT_TIMESTAMP
 );
 
+INSERT INTO changelists (project_id, workspace_id, created_by, target_branch_id, description)
+VALUES (
+    (SELECT id FROM projects WHERE code = 'MYTHIC'),
+    (SELECT id FROM workspaces WHERE name = 'LeadArtist_Workstation'),
+    (SELECT id FROM users WHERE username = 'lead_artist'),
+    (SELECT id FROM branches WHERE name = 'main' AND project_id = (SELECT id FROM projects WHERE code = 'MYTHIC')),
+    'Bundle hero texture polish assets for submission.'
+);
+
+INSERT INTO changelist_items (changelist_id, asset_version_id, action)
+VALUES (
+    (SELECT id FROM changelists WHERE workspace_id = (SELECT id FROM workspaces WHERE name = 'LeadArtist_Workstation') ORDER BY created_at DESC LIMIT 1),
+    (SELECT id FROM asset_versions WHERE asset_id = (SELECT id FROM assets WHERE name = 'hero_texture') AND version_number = 2),
+    'edit'
+);
+
 INSERT INTO asset_locks (asset_id, locked_by, workspace_id, notes)
 VALUES (
     (SELECT id FROM assets WHERE name = 'hero_texture'),
@@ -120,10 +154,11 @@ VALUES (
     'Lock held for texture polish pass'
 );
 
-INSERT INTO shelves (workspace_id, asset_version_id, created_by, description)
+INSERT INTO shelves (workspace_id, asset_version_id, changelist_id, created_by, description)
 VALUES (
     (SELECT id FROM workspaces WHERE name = 'LeadArtist_Workstation'),
     (SELECT id FROM asset_versions WHERE asset_id = (SELECT id FROM assets WHERE name = 'hero_texture') AND version_number = 1),
+    (SELECT id FROM changelists WHERE workspace_id = (SELECT id FROM workspaces WHERE name = 'LeadArtist_Workstation') ORDER BY created_at DESC LIMIT 1),
     (SELECT id FROM users WHERE username = 'lead_artist'),
     'Ready for QA once lighting tweaks are verified.'
 );
@@ -145,4 +180,22 @@ VALUES (
     (SELECT id FROM users WHERE username = 'qa_reviewer'),
     'pending',
     'Awaiting QA validation before milestone lock.'
+);
+
+INSERT INTO branch_merges (project_id, source_branch_id, target_branch_id, initiated_by, status, notes)
+VALUES (
+    (SELECT id FROM projects WHERE code = 'MYTHIC'),
+    (SELECT id FROM branches WHERE name = 'dev_art' AND project_id = (SELECT id FROM projects WHERE code = 'MYTHIC')),
+    (SELECT id FROM branches WHERE name = 'main' AND project_id = (SELECT id FROM projects WHERE code = 'MYTHIC')),
+    (SELECT id FROM users WHERE username = 'lead_artist'),
+    'conflicted',
+    'Polish merge requires reviewer sign-off.'
+);
+
+INSERT INTO merge_conflicts (branch_merge_id, asset_id, asset_version_id, description)
+VALUES (
+    (SELECT id FROM branch_merges WHERE status = 'conflicted' ORDER BY created_at DESC LIMIT 1),
+    (SELECT id FROM assets WHERE name = 'hero_texture'),
+    (SELECT id FROM asset_versions WHERE asset_id = (SELECT id FROM assets WHERE name = 'hero_texture') AND version_number = 2),
+    'Texture adjustments conflict with staging palette. Needs reconciliation.'
 );

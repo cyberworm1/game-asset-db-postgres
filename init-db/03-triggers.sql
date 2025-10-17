@@ -32,6 +32,14 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- Generic helper to refresh updated_at columns.
+CREATE OR REPLACE FUNCTION touch_updated_at() RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at := CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
 -- Prevent modifications to archived projects and ensure assets reference a project.
 CREATE OR REPLACE FUNCTION ensure_project_active_for_assets() RETURNS TRIGGER AS $$
 DECLARE
@@ -204,6 +212,82 @@ BEGIN
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
+
+-- Touch changelist updated_at when children change.
+CREATE OR REPLACE FUNCTION refresh_changelist_timestamp() RETURNS TRIGGER AS $$
+DECLARE
+    target_id UUID;
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        target_id := OLD.changelist_id;
+    ELSE
+        target_id := NEW.changelist_id;
+    END IF;
+
+    IF target_id IS NOT NULL THEN
+        UPDATE changelists SET updated_at = CURRENT_TIMESTAMP WHERE id = target_id;
+    END IF;
+
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Touch branch merge updated_at when conflicts change.
+CREATE OR REPLACE FUNCTION refresh_branch_merge_timestamp() RETURNS TRIGGER AS $$
+DECLARE
+    target_id UUID;
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        target_id := OLD.branch_merge_id;
+    ELSE
+        target_id := NEW.branch_merge_id;
+    END IF;
+
+    IF target_id IS NOT NULL THEN
+        UPDATE branch_merges SET updated_at = CURRENT_TIMESTAMP WHERE id = target_id;
+    END IF;
+
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_projects_updated_at
+    BEFORE UPDATE ON projects
+    FOR EACH ROW
+    EXECUTE FUNCTION touch_project_updated_at();
+
+CREATE TRIGGER trg_changelists_updated_at
+    BEFORE UPDATE ON changelists
+    FOR EACH ROW
+    EXECUTE FUNCTION touch_updated_at();
+
+CREATE TRIGGER trg_branch_merges_updated_at
+    BEFORE UPDATE ON branch_merges
+    FOR EACH ROW
+    EXECUTE FUNCTION touch_updated_at();
+
+CREATE TRIGGER trg_changelist_items_touch_parent
+    AFTER INSERT OR UPDATE OR DELETE ON changelist_items
+    FOR EACH ROW
+    EXECUTE FUNCTION refresh_changelist_timestamp();
+
+CREATE TRIGGER trg_shelves_touch_changelist
+    AFTER INSERT OR UPDATE OR DELETE ON shelves
+    FOR EACH ROW
+    EXECUTE FUNCTION refresh_changelist_timestamp();
+
+CREATE TRIGGER trg_merge_conflicts_touch_branch_merge
+    AFTER INSERT OR UPDATE OR DELETE ON merge_conflicts
+    FOR EACH ROW
+    EXECUTE FUNCTION refresh_branch_merge_timestamp();
 
 -- Prevent archived projects from getting new review records.
 CREATE OR REPLACE FUNCTION ensure_project_active_for_asset_reviews() RETURNS TRIGGER AS $$
