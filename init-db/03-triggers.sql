@@ -274,6 +274,11 @@ CREATE TRIGGER trg_branch_merges_updated_at
     FOR EACH ROW
     EXECUTE FUNCTION touch_updated_at();
 
+CREATE TRIGGER trg_merge_jobs_updated_at
+    BEFORE UPDATE ON merge_jobs
+    FOR EACH ROW
+    EXECUTE FUNCTION touch_updated_at();
+
 CREATE TRIGGER trg_changelist_items_touch_parent
     AFTER INSERT OR UPDATE OR DELETE ON changelist_items
     FOR EACH ROW
@@ -286,6 +291,11 @@ CREATE TRIGGER trg_shelves_touch_changelist
 
 CREATE TRIGGER trg_merge_conflicts_touch_branch_merge
     AFTER INSERT OR UPDATE OR DELETE ON merge_conflicts
+    FOR EACH ROW
+    EXECUTE FUNCTION refresh_branch_merge_timestamp();
+
+CREATE TRIGGER trg_merge_jobs_touch_branch_merge
+    AFTER INSERT OR UPDATE OR DELETE ON merge_jobs
     FOR EACH ROW
     EXECUTE FUNCTION refresh_branch_merge_timestamp();
 

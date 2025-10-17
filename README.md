@@ -5,13 +5,13 @@ This repository provides a PostgreSQL-based database and service stack for manag
 ## Features
 - **Schema Design**: Tables for projects, assets, versions, users, permissions, tags, branches, shelves, workspaces, locks, and review workflows.
 - **Security**: Session-aware row-level security (RLS) policies with helper functions so every request is enforced in-database.
-- **Binary Depot Service**: A FastAPI-powered application server that exposes REST APIs, file upload endpoints, and a lightweight web review dashboard backed by a persistent storage volume.
+- **Binary Depot Service**: A FastAPI-powered application server that exposes REST APIs, file upload endpoints, and a lightweight web review dashboard backed by a deduplicated, compressed storage volume with optional replica mirroring.
 - **Branching & Workspaces**: Branch, workspace, shelf, and asset locking semantics inspired by Helix stream/workspace flows.
 - **Changelists & Submit Validation**: Atomic changelists bundle multiple asset versions with submit-time validation and shelf linkage so reviews happen on coherent sets of work.
-- **Merge Operations**: Branch merge tracking APIs capture integrate requests, conflict summaries, and remediation steps for stream coordination.
+- **Merge Orchestration**: Branch merge tracking now seeds auto-integrate, conflict staging, and submit-gate jobs; merges cannot complete until submit gates pass and conflicts are resolved, mirroring Helix stream safeguards.
 - **Admin & Branch APIs**: FastAPI endpoints now cover project provisioning, branch/shelf management, and permission administration so Helix-equivalent concepts live beyond raw SQL tables.
 - **Storage Planning**: Project storage snapshots to plan for the default 10TB allocation with room to scale.
-- **Operations**: Docker Compose adds scheduled backups, pgAdmin for administration, and scripts for replication & disaster recovery runbooks.
+- **Operations**: Docker Compose adds scheduled backups, pgAdmin for administration, and scripts for replication & disaster recovery runbooks—including `operations_automation.py` for nightly health verification.
 - **Tuning**: Guide for performance in high-load scenarios (e.g., during asset uploads for game builds).
 - **Sample Data**: Pre-populated with demo assets, branches, workspaces, and locks for testing.
 
