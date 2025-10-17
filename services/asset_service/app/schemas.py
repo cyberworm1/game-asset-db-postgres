@@ -107,6 +107,7 @@ class BranchResponse(BaseModel):
 class ShelfCreate(BaseModel):
     workspace_id: UUID
     asset_version_id: UUID
+    changelist_id: Optional[UUID]
     description: Optional[str]
 
 
@@ -114,9 +115,101 @@ class ShelfResponse(BaseModel):
     id: UUID
     workspace_id: UUID
     asset_version_id: UUID
+    changelist_id: Optional[UUID]
     created_by: UUID
     created_at: datetime
     description: Optional[str]
+
+
+class ChangelistItemResponse(BaseModel):
+    id: UUID
+    asset_version_id: UUID
+    action: str
+    target_branch_id: Optional[UUID]
+    created_at: datetime
+
+
+class ChangelistResponse(BaseModel):
+    id: UUID
+    project_id: UUID
+    workspace_id: Optional[UUID]
+    created_by: UUID
+    target_branch_id: Optional[UUID]
+    status: str
+    description: Optional[str]
+    submitter_notes: Optional[str]
+    submitted_at: Optional[datetime]
+    created_at: datetime
+    updated_at: datetime
+    shelf_id: Optional[UUID]
+    items: List[ChangelistItemResponse] = Field(default_factory=list)
+
+
+class ChangelistCreate(BaseModel):
+    project_id: UUID
+    workspace_id: UUID
+    target_branch_id: Optional[UUID]
+    description: Optional[str]
+    shelf_id: Optional[UUID]
+
+
+class ChangelistItemCreate(BaseModel):
+    asset_version_id: UUID
+    action: str = "edit"
+    target_branch_id: Optional[UUID]
+
+
+class ChangelistSubmitRequest(BaseModel):
+    submitter_notes: Optional[str]
+    status: Optional[str] = "submitted"
+
+
+class BranchMergeCreate(BaseModel):
+    project_id: UUID
+    source_branch_id: UUID
+    target_branch_id: UUID
+    notes: Optional[str]
+
+
+class BranchMergeResponse(BaseModel):
+    id: UUID
+    project_id: UUID
+    source_branch_id: UUID
+    target_branch_id: UUID
+    initiated_by: UUID
+    status: str
+    conflict_summary: Optional[dict]
+    notes: Optional[str]
+    created_at: datetime
+    completed_at: Optional[datetime]
+
+
+class BranchMergeUpdate(BaseModel):
+    status: Optional[str]
+    conflict_summary: Optional[dict]
+    notes: Optional[str]
+    completed: Optional[bool]
+
+
+class MergeConflictCreate(BaseModel):
+    asset_id: Optional[UUID]
+    asset_version_id: Optional[UUID]
+    description: str
+
+
+class MergeConflictUpdate(BaseModel):
+    resolution: Optional[str]
+    resolved: Optional[bool]
+
+
+class MergeConflictResponse(BaseModel):
+    id: UUID
+    branch_merge_id: UUID
+    asset_id: Optional[UUID]
+    asset_version_id: Optional[UUID]
+    description: Optional[str]
+    resolution: Optional[str]
+    resolved_at: Optional[datetime]
 
 
 class PermissionBase(BaseModel):

@@ -17,9 +17,20 @@ from .schemas import (
     AssetVersionCreate,
     AssetVersionResponse,
     BranchCreate,
+    BranchMergeCreate,
+    BranchMergeResponse,
+    BranchMergeUpdate,
     BranchResponse,
     BranchUpdate,
+    ChangelistCreate,
+    ChangelistItemCreate,
+    ChangelistItemResponse,
+    ChangelistResponse,
+    ChangelistSubmitRequest,
     LockRequest,
+    MergeConflictCreate,
+    MergeConflictResponse,
+    MergeConflictUpdate,
     PermissionCreate,
     PermissionResponse,
     PermissionUpdate,
@@ -91,9 +102,95 @@ def _shelf_row_to_response(row: Dict[str, Any]) -> ShelfResponse:
         id=row["id"],
         workspace_id=row["workspace_id"],
         asset_version_id=row["asset_version_id"],
+        changelist_id=row.get("changelist_id"),
         created_by=row["created_by"],
         created_at=row["created_at"],
         description=row.get("description"),
+    )
+
+
+def _changelist_item_row_to_response(row: Dict[str, Any]) -> ChangelistItemResponse:
+    return ChangelistItemResponse(
+        id=row["id"],
+        asset_version_id=row["asset_version_id"],
+        action=row["action"],
+        target_branch_id=row.get("target_branch_id"),
+        created_at=row["created_at"],
+    )
+
+
+def _changelist_row_to_response(conn, row: Dict[str, Any]) -> ChangelistResponse:
+    items: List[ChangelistItemResponse] = []
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            SELECT id, asset_version_id, action, target_branch_id, created_at
+            FROM changelist_items
+            WHERE changelist_id = %s
+            ORDER BY created_at
+            """,
+            (str(row["id"]),),
+        )
+        item_rows = cur.fetchall()
+        items = [_changelist_item_row_to_response(item_row) for item_row in item_rows]
+
+    shelf_id: Optional[UUID] = None
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            "SELECT id FROM shelves WHERE changelist_id = %s ORDER BY created_at DESC LIMIT 1",
+            (str(row["id"]),),
+        )
+        shelf_row = cur.fetchone()
+        if shelf_row:
+            shelf_id = shelf_row["id"]
+
+    return ChangelistResponse(
+        id=row["id"],
+        project_id=row["project_id"],
+        workspace_id=row.get("workspace_id"),
+        created_by=row["created_by"],
+        target_branch_id=row.get("target_branch_id"),
+        status=row["status"],
+        description=row.get("description"),
+        submitter_notes=row.get("submitter_notes"),
+        submitted_at=row.get("submitted_at"),
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+        shelf_id=shelf_id,
+        items=items,
+    )
+
+
+def _branch_merge_row_to_response(row: Dict[str, Any]) -> BranchMergeResponse:
+    conflict_summary = row.get("conflict_summary")
+    if isinstance(conflict_summary, str):
+        try:
+            conflict_summary = json.loads(conflict_summary)
+        except json.JSONDecodeError:
+            conflict_summary = {"raw": conflict_summary}
+    return BranchMergeResponse(
+        id=row["id"],
+        project_id=row["project_id"],
+        source_branch_id=row["source_branch_id"],
+        target_branch_id=row["target_branch_id"],
+        initiated_by=row["initiated_by"],
+        status=row["status"],
+        conflict_summary=conflict_summary,
+        notes=row.get("notes"),
+        created_at=row["created_at"],
+        completed_at=row.get("completed_at"),
+    )
+
+
+def _merge_conflict_row_to_response(row: Dict[str, Any]) -> MergeConflictResponse:
+    return MergeConflictResponse(
+        id=row["id"],
+        branch_merge_id=row["branch_merge_id"],
+        asset_id=row.get("asset_id"),
+        asset_version_id=row.get("asset_version_id"),
+        description=row.get("description"),
+        resolution=row.get("resolution"),
+        resolved_at=row.get("resolved_at"),
     )
 
 
@@ -335,7 +432,7 @@ def list_shelves(project_id: UUID, current_user: dict = Depends(get_current_user
             with conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(
                     """
-                    SELECT s.id, s.workspace_id, s.asset_version_id, s.created_by, s.created_at, s.description
+                    SELECT s.id, s.workspace_id, s.asset_version_id, s.changelist_id, s.created_by, s.created_at, s.description
                     FROM shelves s
                     JOIN workspaces w ON w.id = s.workspace_id
                     WHERE w.project_id = %s
@@ -359,20 +456,40 @@ def create_shelf(payload: ShelfCreate, current_user: dict = Depends(get_current_
         try:
             set_rls_user(conn, current_user["id"])
             with conn.cursor(row_factory=dict_row) as cur:
+                changelist_id: Optional[str] = None
+                if payload.changelist_id:
+                    cur.execute(
+                        "SELECT id, workspace_id, status FROM changelists WHERE id = %s",
+                        (str(payload.changelist_id),),
+                    )
+                    changelist = cur.fetchone()
+                    if not changelist:
+                        raise HTTPException(status_code=404, detail="Changelist not found")
+                    if str(changelist.get("workspace_id")) != str(payload.workspace_id):
+                        raise HTTPException(status_code=400, detail="Changelist workspace mismatch")
+                    if changelist.get("status") not in ("open", "pending_review"):
+                        raise HTTPException(status_code=400, detail="Changelist is not accepting shelves")
+                    changelist_id = str(payload.changelist_id)
                 cur.execute(
                     """
-                    INSERT INTO shelves (workspace_id, asset_version_id, created_by, description)
-                    VALUES (%s, %s, %s, %s)
-                    RETURNING id, workspace_id, asset_version_id, created_by, created_at, description
+                    INSERT INTO shelves (workspace_id, asset_version_id, changelist_id, created_by, description)
+                    VALUES (%s, %s, %s, %s, %s)
+                    RETURNING id, workspace_id, asset_version_id, changelist_id, created_by, created_at, description
                     """,
                     (
                         str(payload.workspace_id),
                         str(payload.asset_version_id),
+                        changelist_id,
                         current_user["id"],
                         payload.description,
                     ),
                 )
                 row = cur.fetchone()
+                if changelist_id:
+                    cur.execute(
+                        "UPDATE changelists SET updated_at = NOW() WHERE id = %s",
+                        (changelist_id,),
+                    )
                 conn.commit()
                 return _shelf_row_to_response(row)
         except Exception as exc:
@@ -396,6 +513,562 @@ def delete_shelf(shelf_id: UUID, current_user: dict = Depends(get_current_user))
                     cur.execute("DELETE FROM shelves WHERE id = %s", (str(shelf_id),))
             conn.commit()
             return None
+        except HTTPException:
+            conn.rollback()
+            raise
+        except Exception as exc:
+            conn.rollback()
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.get("/projects/{project_id}/changelists", response_model=List[ChangelistResponse], tags=["changelists"])
+def list_changelists(project_id: UUID, current_user: dict = Depends(get_current_user)):
+    with get_connection() as conn:
+        try:
+            set_rls_user(conn, current_user["id"])
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    """
+                    SELECT id, project_id, workspace_id, created_by, target_branch_id, status,
+                           description, submitter_notes, submitted_at, created_at, updated_at
+                    FROM changelists
+                    WHERE project_id = %s
+                    ORDER BY created_at DESC
+                    """,
+                    (str(project_id),),
+                )
+                rows = cur.fetchall()
+            return [_changelist_row_to_response(conn, row) for row in rows]
+        except HTTPException:
+            conn.rollback()
+            raise
+        except Exception as exc:
+            conn.rollback()
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/changelists", response_model=ChangelistResponse, status_code=status.HTTP_201_CREATED, tags=["changelists"])
+def create_changelist(payload: ChangelistCreate, current_user: dict = Depends(get_current_user)):
+    with get_connection() as conn:
+        try:
+            set_rls_user(conn, current_user["id"])
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute("SELECT project_id FROM workspaces WHERE id = %s", (str(payload.workspace_id),))
+                workspace = cur.fetchone()
+                if not workspace:
+                    raise HTTPException(status_code=404, detail="Workspace not found")
+                if str(workspace["project_id"]) != str(payload.project_id):
+                    raise HTTPException(status_code=400, detail="Workspace does not belong to project")
+                if payload.target_branch_id:
+                    cur.execute("SELECT project_id FROM branches WHERE id = %s", (str(payload.target_branch_id),))
+                    branch = cur.fetchone()
+                    if not branch:
+                        raise HTTPException(status_code=404, detail="Target branch not found")
+                    if str(branch["project_id"]) != str(payload.project_id):
+                        raise HTTPException(status_code=400, detail="Target branch not in project")
+                if payload.shelf_id:
+                    cur.execute(
+                        "SELECT workspace_id, changelist_id FROM shelves WHERE id = %s",
+                        (str(payload.shelf_id),),
+                    )
+                    shelf = cur.fetchone()
+                    if not shelf:
+                        raise HTTPException(status_code=404, detail="Shelf not found")
+                    if str(shelf["workspace_id"]) != str(payload.workspace_id):
+                        raise HTTPException(status_code=400, detail="Shelf workspace mismatch")
+                    if shelf.get("changelist_id") is not None:
+                        raise HTTPException(status_code=400, detail="Shelf is already linked to a changelist")
+                cur.execute(
+                    """
+                    INSERT INTO changelists (project_id, workspace_id, created_by, target_branch_id, description)
+                    VALUES (%s, %s, %s, %s, %s)
+                    RETURNING id, project_id, workspace_id, created_by, target_branch_id, status,
+                              description, submitter_notes, submitted_at, created_at, updated_at
+                    """,
+                    (
+                        str(payload.project_id),
+                        str(payload.workspace_id),
+                        current_user["id"],
+                        str(payload.target_branch_id) if payload.target_branch_id else None,
+                        payload.description,
+                    ),
+                )
+                changelist = cur.fetchone()
+                if payload.shelf_id:
+                    cur.execute(
+                        "UPDATE shelves SET changelist_id = %s WHERE id = %s",
+                        (str(changelist["id"]), str(payload.shelf_id)),
+                    )
+                conn.commit()
+                return _changelist_row_to_response(conn, changelist)
+        except HTTPException:
+            conn.rollback()
+            raise
+        except Exception as exc:
+            conn.rollback()
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.get("/changelists/{changelist_id}", response_model=ChangelistResponse, tags=["changelists"])
+def get_changelist(changelist_id: UUID, current_user: dict = Depends(get_current_user)):
+    with get_connection() as conn:
+        try:
+            set_rls_user(conn, current_user["id"])
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    """
+                    SELECT id, project_id, workspace_id, created_by, target_branch_id, status,
+                           description, submitter_notes, submitted_at, created_at, updated_at
+                    FROM changelists
+                    WHERE id = %s
+                    """,
+                    (str(changelist_id),),
+                )
+                row = cur.fetchone()
+                if not row:
+                    raise HTTPException(status_code=404, detail="Changelist not found")
+                return _changelist_row_to_response(conn, row)
+        except HTTPException:
+            conn.rollback()
+            raise
+        except Exception as exc:
+            conn.rollback()
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post(
+    "/changelists/{changelist_id}/items",
+    response_model=ChangelistResponse,
+    status_code=status.HTTP_200_OK,
+    tags=["changelists"],
+)
+def add_changelist_item(
+    changelist_id: UUID,
+    payload: ChangelistItemCreate,
+    current_user: dict = Depends(get_current_user),
+):
+    with get_connection() as conn:
+        try:
+            set_rls_user(conn, current_user["id"])
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    "SELECT project_id, status FROM changelists WHERE id = %s",
+                    (str(changelist_id),),
+                )
+                changelist = cur.fetchone()
+                if not changelist:
+                    raise HTTPException(status_code=404, detail="Changelist not found")
+                if changelist["status"] not in ("open", "pending_review"):
+                    raise HTTPException(status_code=400, detail="Changelist is not editable")
+                if payload.action not in ("add", "edit", "delete", "integrate"):
+                    raise HTTPException(status_code=400, detail="Unsupported changelist action")
+                cur.execute(
+                    """
+                    SELECT a.project_id
+                    FROM asset_versions av
+                    JOIN assets a ON a.id = av.asset_id
+                    WHERE av.id = %s
+                    """,
+                    (str(payload.asset_version_id),),
+                )
+                asset_project = cur.fetchone()
+                if not asset_project:
+                    raise HTTPException(status_code=404, detail="Asset version not found")
+                if str(asset_project["project_id"]) != str(changelist["project_id"]):
+                    raise HTTPException(status_code=400, detail="Asset version from different project")
+                target_branch_id = None
+                if payload.target_branch_id:
+                    cur.execute("SELECT project_id FROM branches WHERE id = %s", (str(payload.target_branch_id),))
+                    branch = cur.fetchone()
+                    if not branch:
+                        raise HTTPException(status_code=404, detail="Target branch not found")
+                    if str(branch["project_id"]) != str(changelist["project_id"]):
+                        raise HTTPException(status_code=400, detail="Target branch not in project")
+                    target_branch_id = str(payload.target_branch_id)
+                cur.execute(
+                    """
+                    INSERT INTO changelist_items (changelist_id, asset_version_id, action, target_branch_id)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (changelist_id, asset_version_id) DO UPDATE SET
+                        action = EXCLUDED.action,
+                        target_branch_id = EXCLUDED.target_branch_id,
+                        created_at = NOW()
+                    RETURNING id, asset_version_id, action, target_branch_id, created_at
+                    """,
+                    (
+                        str(changelist_id),
+                        str(payload.asset_version_id),
+                        payload.action,
+                        target_branch_id,
+                    ),
+                )
+                cur.fetchone()
+                cur.execute("UPDATE changelists SET updated_at = NOW() WHERE id = %s", (str(changelist_id),))
+                cur.execute(
+                    """
+                    SELECT id, project_id, workspace_id, created_by, target_branch_id, status,
+                           description, submitter_notes, submitted_at, created_at, updated_at
+                    FROM changelists
+                    WHERE id = %s
+                    """,
+                    (str(changelist_id),),
+                )
+                row = cur.fetchone()
+                conn.commit()
+                return _changelist_row_to_response(conn, row)
+        except HTTPException:
+            conn.rollback()
+            raise
+        except Exception as exc:
+            conn.rollback()
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.delete(
+    "/changelists/{changelist_id}/items/{item_id}",
+    response_model=ChangelistResponse,
+    tags=["changelists"],
+)
+def remove_changelist_item(
+    changelist_id: UUID,
+    item_id: UUID,
+    current_user: dict = Depends(get_current_user),
+):
+    with get_connection() as conn:
+        try:
+            set_rls_user(conn, current_user["id"])
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    "DELETE FROM changelist_items WHERE id = %s AND changelist_id = %s",
+                    (str(item_id), str(changelist_id)),
+                )
+                if cur.rowcount == 0:
+                    raise HTTPException(status_code=404, detail="Changelist item not found")
+                cur.execute("UPDATE changelists SET updated_at = NOW() WHERE id = %s", (str(changelist_id),))
+                cur.execute(
+                    """
+                    SELECT id, project_id, workspace_id, created_by, target_branch_id, status,
+                           description, submitter_notes, submitted_at, created_at, updated_at
+                    FROM changelists
+                    WHERE id = %s
+                    """,
+                    (str(changelist_id),),
+                )
+                row = cur.fetchone()
+                conn.commit()
+                if not row:
+                    raise HTTPException(status_code=404, detail="Changelist not found")
+                return _changelist_row_to_response(conn, row)
+        except HTTPException:
+            conn.rollback()
+            raise
+        except Exception as exc:
+            conn.rollback()
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post(
+    "/changelists/{changelist_id}/submit",
+    response_model=ChangelistResponse,
+    tags=["changelists"],
+)
+def submit_changelist(
+    changelist_id: UUID,
+    payload: ChangelistSubmitRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    desired_status = payload.status or "submitted"
+    if desired_status not in ("submitted", "pending_review"):
+        raise HTTPException(status_code=400, detail="Unsupported changelist status")
+    with get_connection() as conn:
+        try:
+            set_rls_user(conn, current_user["id"])
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    "SELECT id, project_id, target_branch_id, status FROM changelists WHERE id = %s",
+                    (str(changelist_id),),
+                )
+                changelist = cur.fetchone()
+                if not changelist:
+                    raise HTTPException(status_code=404, detail="Changelist not found")
+                if changelist["status"] not in ("open", "pending_review") and changelist["status"] != desired_status:
+                    raise HTTPException(status_code=400, detail="Changelist already finalized")
+                if not changelist.get("target_branch_id"):
+                    raise HTTPException(status_code=400, detail="Target branch is required before submit")
+                cur.execute(
+                    "SELECT COUNT(*) AS item_count FROM changelist_items WHERE changelist_id = %s",
+                    (str(changelist_id),),
+                )
+                count_row = cur.fetchone()
+                if not count_row or count_row["item_count"] == 0:
+                    raise HTTPException(status_code=400, detail="Changelist must include at least one asset version")
+                cur.execute(
+                    """
+                    UPDATE changelists
+                    SET status = %s,
+                        submitter_notes = %s,
+                        submitted_at = NOW(),
+                        updated_at = NOW()
+                    WHERE id = %s
+                    RETURNING id, project_id, workspace_id, created_by, target_branch_id, status,
+                              description, submitter_notes, submitted_at, created_at, updated_at
+                    """,
+                    (
+                        desired_status,
+                        payload.submitter_notes,
+                        str(changelist_id),
+                    ),
+                )
+                row = cur.fetchone()
+                conn.commit()
+                if not row:
+                    raise HTTPException(status_code=404, detail="Changelist not found")
+                return _changelist_row_to_response(conn, row)
+        except HTTPException:
+            conn.rollback()
+            raise
+        except Exception as exc:
+            conn.rollback()
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.get(
+    "/projects/{project_id}/branch-merges",
+    response_model=List[BranchMergeResponse],
+    tags=["branch-merges"],
+)
+def list_branch_merges(project_id: UUID, current_user: dict = Depends(get_current_user)):
+    with get_connection() as conn:
+        try:
+            set_rls_user(conn, current_user["id"])
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    """
+                    SELECT id, project_id, source_branch_id, target_branch_id, initiated_by, status,
+                           conflict_summary, notes, created_at, completed_at
+                    FROM branch_merges
+                    WHERE project_id = %s
+                    ORDER BY created_at DESC
+                    """,
+                    (str(project_id),),
+                )
+                rows = cur.fetchall()
+                return [_branch_merge_row_to_response(row) for row in rows]
+        except HTTPException:
+            conn.rollback()
+            raise
+        except Exception as exc:
+            conn.rollback()
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post(
+    "/branch-merges",
+    response_model=BranchMergeResponse,
+    status_code=status.HTTP_201_CREATED,
+    tags=["branch-merges"],
+)
+def create_branch_merge(payload: BranchMergeCreate, current_user: dict = Depends(get_current_user)):
+    if payload.source_branch_id == payload.target_branch_id:
+        raise HTTPException(status_code=400, detail="Source and target branches must differ")
+    with get_connection() as conn:
+        try:
+            set_rls_user(conn, current_user["id"])
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute("SELECT project_id FROM branches WHERE id = %s", (str(payload.source_branch_id),))
+                source_branch = cur.fetchone()
+                if not source_branch:
+                    raise HTTPException(status_code=404, detail="Source branch not found")
+                cur.execute("SELECT project_id FROM branches WHERE id = %s", (str(payload.target_branch_id),))
+                target_branch = cur.fetchone()
+                if not target_branch:
+                    raise HTTPException(status_code=404, detail="Target branch not found")
+                if str(source_branch["project_id"]) != str(payload.project_id) or str(target_branch["project_id"]) != str(payload.project_id):
+                    raise HTTPException(status_code=400, detail="Branches do not belong to project")
+                cur.execute(
+                    """
+                    INSERT INTO branch_merges (project_id, source_branch_id, target_branch_id, initiated_by, notes)
+                    VALUES (%s, %s, %s, %s, %s)
+                    RETURNING id, project_id, source_branch_id, target_branch_id, initiated_by, status,
+                              conflict_summary, notes, created_at, completed_at
+                    """,
+                    (
+                        str(payload.project_id),
+                        str(payload.source_branch_id),
+                        str(payload.target_branch_id),
+                        current_user["id"],
+                        payload.notes,
+                    ),
+                )
+                merge = cur.fetchone()
+                conn.commit()
+                return _branch_merge_row_to_response(merge)
+        except HTTPException:
+            conn.rollback()
+            raise
+        except Exception as exc:
+            conn.rollback()
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.patch("/branch-merges/{merge_id}", response_model=BranchMergeResponse, tags=["branch-merges"])
+def update_branch_merge(merge_id: UUID, payload: BranchMergeUpdate, current_user: dict = Depends(get_current_user)):
+    set_clauses: List[str] = []
+    params: List[Any] = []
+    if payload.status is not None:
+        if payload.status not in ("pending", "merged", "conflicted", "cancelled"):
+            raise HTTPException(status_code=400, detail="Invalid merge status")
+        set_clauses.append("status = %s")
+        params.append(payload.status)
+    if payload.conflict_summary is not None:
+        set_clauses.append("conflict_summary = %s")
+        if isinstance(payload.conflict_summary, (dict, list)):
+            params.append(json.dumps(payload.conflict_summary))
+        else:
+            params.append(payload.conflict_summary)
+    if payload.notes is not None:
+        set_clauses.append("notes = %s")
+        params.append(payload.notes)
+    if payload.completed is not None:
+        if payload.completed:
+            set_clauses.append("completed_at = NOW()")
+        else:
+            set_clauses.append("completed_at = NULL")
+    if not set_clauses:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No fields provided")
+
+    with get_connection() as conn:
+        try:
+            set_rls_user(conn, current_user["id"])
+            with conn.cursor(row_factory=dict_row) as cur:
+                set_clauses.append("updated_at = NOW()")
+                query = (
+                    "UPDATE branch_merges SET "
+                    + ", ".join(set_clauses)
+                    + " WHERE id = %s RETURNING id, project_id, source_branch_id, target_branch_id, initiated_by, status, conflict_summary, notes, created_at, completed_at"
+                )
+                params.append(str(merge_id))
+                cur.execute(query, params)
+                row = cur.fetchone()
+                if not row:
+                    raise HTTPException(status_code=404, detail="Branch merge not found")
+                conn.commit()
+                return _branch_merge_row_to_response(row)
+        except HTTPException:
+            conn.rollback()
+            raise
+        except Exception as exc:
+            conn.rollback()
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.get(
+    "/branch-merges/{merge_id}/conflicts",
+    response_model=List[MergeConflictResponse],
+    tags=["branch-merges"],
+)
+def list_merge_conflicts(merge_id: UUID, current_user: dict = Depends(get_current_user)):
+    with get_connection() as conn:
+        try:
+            set_rls_user(conn, current_user["id"])
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    """
+                    SELECT id, branch_merge_id, asset_id, asset_version_id, description, resolution, resolved_at
+                    FROM merge_conflicts
+                    WHERE branch_merge_id = %s
+                    ORDER BY created_at DESC NULLS LAST
+                    """,
+                    (str(merge_id),),
+                )
+                rows = cur.fetchall()
+                return [_merge_conflict_row_to_response(row) for row in rows]
+        except HTTPException:
+            conn.rollback()
+            raise
+        except Exception as exc:
+            conn.rollback()
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post(
+    "/branch-merges/{merge_id}/conflicts",
+    response_model=MergeConflictResponse,
+    status_code=status.HTTP_201_CREATED,
+    tags=["branch-merges"],
+)
+def create_merge_conflict(
+    merge_id: UUID,
+    payload: MergeConflictCreate,
+    current_user: dict = Depends(get_current_user),
+):
+    with get_connection() as conn:
+        try:
+            set_rls_user(conn, current_user["id"])
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute("SELECT id FROM branch_merges WHERE id = %s", (str(merge_id),))
+                merge = cur.fetchone()
+                if not merge:
+                    raise HTTPException(status_code=404, detail="Branch merge not found")
+                cur.execute(
+                    """
+                    INSERT INTO merge_conflicts (branch_merge_id, asset_id, asset_version_id, description)
+                    VALUES (%s, %s, %s, %s)
+                    RETURNING id, branch_merge_id, asset_id, asset_version_id, description, resolution, resolved_at
+                    """,
+                    (
+                        str(merge_id),
+                        str(payload.asset_id) if payload.asset_id else None,
+                        str(payload.asset_version_id) if payload.asset_version_id else None,
+                        payload.description,
+                    ),
+                )
+                row = cur.fetchone()
+                conn.commit()
+                return _merge_conflict_row_to_response(row)
+        except HTTPException:
+            conn.rollback()
+            raise
+        except Exception as exc:
+            conn.rollback()
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.patch("/merge-conflicts/{conflict_id}", response_model=MergeConflictResponse, tags=["branch-merges"])
+def update_merge_conflict(
+    conflict_id: UUID,
+    payload: MergeConflictUpdate,
+    current_user: dict = Depends(get_current_user),
+):
+    set_clauses: List[str] = []
+    params: List[Any] = []
+    if payload.resolution is not None:
+        set_clauses.append("resolution = %s")
+        params.append(payload.resolution)
+    if payload.resolved is not None:
+        if payload.resolved:
+            set_clauses.append("resolved_at = NOW()")
+        else:
+            set_clauses.append("resolved_at = NULL")
+    if not set_clauses:
+        raise HTTPException(status_code=400, detail="No fields provided")
+
+    with get_connection() as conn:
+        try:
+            set_rls_user(conn, current_user["id"])
+            with conn.cursor(row_factory=dict_row) as cur:
+                query = (
+                    "UPDATE merge_conflicts SET "
+                    + ", ".join(set_clauses)
+                    + " WHERE id = %s RETURNING id, branch_merge_id, asset_id, asset_version_id, description, resolution, resolved_at"
+                )
+                params.append(str(conflict_id))
+                cur.execute(query, params)
+                row = cur.fetchone()
+                if not row:
+                    raise HTTPException(status_code=404, detail="Merge conflict not found")
+                conn.commit()
+                return _merge_conflict_row_to_response(row)
         except HTTPException:
             conn.rollback()
             raise
