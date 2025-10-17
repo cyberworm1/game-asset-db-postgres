@@ -10,6 +10,7 @@ bl_info = {
     "category": "Import-Export",
 }
 
+import json
 import logging
 from typing import Any
 
@@ -29,30 +30,38 @@ class GameAssetDbSettings(bpy.types.AddonPreferences):  # type: ignore[misc]
         default=load_config().get("api_base_url", "https://game-asset-db.example.com/api"),
     )
 
-    client_id: bpy.props.StringProperty(  # type: ignore[assignment]
-        name="Client ID",
-        description="OAuth client identifier",
-        default=load_config().get("client_id", ""),
+    project_id: bpy.props.StringProperty(  # type: ignore[assignment]
+        name="Project ID",
+        description="UUID of the project to browse",
+        default=load_config().get("project_id", ""),
     )
 
-    client_secret: bpy.props.StringProperty(  # type: ignore[assignment]
-        name="Client Secret",
-        description="OAuth client secret",
+    username: bpy.props.StringProperty(  # type: ignore[assignment]
+        name="Username",
+        description="Service account or artist username",
+        default=load_config().get("username", ""),
+    )
+
+    password: bpy.props.StringProperty(  # type: ignore[assignment]
+        name="Password",
+        description="Password used for /auth/token",
         subtype="PASSWORD",
-        default=load_config().get("client_secret", ""),
+        default=load_config().get("password", ""),
     )
 
     def draw(self, context):  # noqa: D401 - Blender override
         layout = self.layout
         layout.prop(self, "api_base_url")
-        layout.prop(self, "client_id")
-        layout.prop(self, "client_secret")
+        layout.prop(self, "project_id")
+        layout.prop(self, "username")
+        layout.prop(self, "password")
 
     def update_config(self) -> None:
         update_config(
             api_base_url=self.api_base_url,
-            client_id=self.client_id,
-            client_secret=self.client_secret,
+            project_id=self.project_id,
+            username=self.username,
+            password=self.password,
         )
 
 
@@ -61,9 +70,15 @@ class GAME_ASSET_DB_OT_refresh(bpy.types.Operator):  # type: ignore[misc]
     bl_label = "Refresh Assets"
 
     def execute(self, context):  # noqa: D401 - Blender override
-        client = GameAssetDbClient()
+        config = load_config()
+        project_id = config.get("project_id")
+        if not project_id:
+            self.report({'ERROR'}, "Set project_id in the Game Asset DB add-on preferences.")
+            return {'CANCELLED'}
+
+        client = GameAssetDbClient(config)
         try:
-            payload = client.list_assets()
+            payload = client.list_assets(project_id=project_id)
             items = payload.get("items", [])
         except Exception as exc:  # noqa: BLE001 - user feedback
             self.report({'ERROR'}, f"Failed to load assets: {exc}")
@@ -71,10 +86,13 @@ class GAME_ASSET_DB_OT_refresh(bpy.types.Operator):  # type: ignore[misc]
         collection = context.scene.game_asset_db_assets
         collection.clear()
         for asset in items:
+            versions = asset.get("versions", []) or []
+            latest_version = versions[-1]["version_number"] if versions else "-"
             item = collection.add()
             item.asset_id = asset.get("id", "")
-            item.name = asset.get("name", "Unnamed")
-            item.version = str(asset.get("version", ""))
+            item.asset_name = asset.get("name", "Unnamed")
+            item.asset_type = asset.get("type", "Unknown")
+            item.version = str(latest_version)
         LOGGER.info("Loaded %s assets into Blender panel", len(items))
         return {'FINISHED'}
 
@@ -89,24 +107,40 @@ class GAME_ASSET_DB_OT_import(bpy.types.Operator):  # type: ignore[misc]
             self.report({'WARNING'}, "No assets available to import")
             return {'CANCELLED'}
         active = selection[selection.active_index]
-        client = GameAssetDbClient()
+        config = load_config()
+        project_id = config.get("project_id")
+        if not project_id:
+            self.report({'ERROR'}, "Set project_id in the Game Asset DB add-on preferences.")
+            return {'CANCELLED'}
+
+        client = GameAssetDbClient(config)
         try:
-            client.import_asset(active.asset_id)
+            detail = client.import_asset(active.asset_id)
         except Exception as exc:  # noqa: BLE001 - user feedback
             self.report({'ERROR'}, f"Import failed: {exc}")
             return {'CANCELLED'}
-        LOGGER.info("Triggered Blender import for asset %s", active.asset_id)
+        text_name = f"Asset_{active.asset_name or active.asset_id}"[:64]
+        if text_name in bpy.data.texts:
+            text_block = bpy.data.texts[text_name]
+            text_block.clear()
+        else:
+            text_block = bpy.data.texts.new(text_name)
+        text_block.write(json.dumps(detail, indent=2, default=str))
+        self.report({'INFO'}, f"Imported metadata for {active.asset_name}")
+        LOGGER.info("Imported metadata for asset %s", active.asset_id)
         return {'FINISHED'}
 
 
 class GameAssetDbAssetItem(bpy.types.PropertyGroup):  # type: ignore[misc]
     asset_id: bpy.props.StringProperty(name="Asset ID")  # type: ignore[assignment]
+    asset_name: bpy.props.StringProperty(name="Name")  # type: ignore[assignment]
+    asset_type: bpy.props.StringProperty(name="Type")  # type: ignore[assignment]
     version: bpy.props.StringProperty(name="Version")  # type: ignore[assignment]
 
 
 class GAME_ASSET_DB_UL_asset_list(bpy.types.UIList):  # type: ignore[misc]
     def draw_item(self, _context, layout, _data, item, _icon, _active_data, _active_propname):
-        layout.label(text=f"{item.name} (v{item.version})")
+        layout.label(text=f"{item.asset_name} (v{item.version}) — {item.asset_type}")
 
 
 class GAME_ASSET_DB_PT_panel(bpy.types.Panel):  # type: ignore[misc]

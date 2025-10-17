@@ -1,6 +1,6 @@
 # Plugin Development Guide
 
-This project does not yet include dedicated plugins for popular digital content creation (DCC) and game production tools. The guidance below outlines the expected architecture, technology stacks, and build steps for creating cross-platform plugins that integrate with the Game Asset Database service.
+The repository now ships with working reference plugins (Unity editor package plus language-agnostic REST client) that authenticate against the service and interact with the expanded API surface. This guide outlines how to build additional DCC integrations that match Helix parity while reusing the shared components provided here.
 
 ## Common Requirements
 
@@ -8,27 +8,47 @@ All plugins should share the following traits:
 
 - **Language preference:** Python where possible. For tools without Python SDK access (primarily some Windows-only hosts), use the vendor-recommended language or bridge technology.
 - **Transport:** Communicate with the Game Asset Database via the REST API (preferred) or GraphQL endpoints once available.
-- **Authentication:** Reuse the shared auth client library once implemented. Until then, issue OAuth2 tokens directly against the backend.
+- **Authentication:** Use the shared REST client in `plugins/common` or mirror its `/auth/token` workflow directly within your host.
 - **Configuration:** Store host-agnostic settings (API base URL, client ID, cache directory) in a per-user config file under the host application's standard preferences location.
 - **Logging:** Write structured logs to the host application's logging facility, with an option to forward diagnostic bundles to the central ops team.
 - **Packaging:** Provide signed installers or extension bundles for Windows, macOS, and Linux when the host application supports the platform.
 
-### REST Endpoints Now Available
+### REST Endpoints Ready for Plugins
 
-The asset depot service (FastAPI) ships with authenticated endpoints that plugins can call today:
+The FastAPI service exposes the endpoints below. All routes require bearer authentication via `/auth/token`.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `POST` | `/auth/token` | Retrieve a bearer token using studio credentials. |
 | `GET` | `/projects/{project_id}/assets` | List accessible assets plus their versions (RLS enforced). |
+| `GET` | `/projects` | List projects visible to the caller (optionally including archived records). |
+| `POST` | `/projects` | Provision a project (admin only). |
+| `PATCH` | `/projects/{project_id}` | Update metadata, storage quotas, or archive state (admin only). |
+| `GET` | `/projects/{project_id}/assets` | List accessible assets plus their versions (RLS enforced). |
+| `GET` | `/assets/{asset_id}` | Retrieve full asset metadata and version history. |
 | `POST` | `/assets` | Create a new asset record. |
 | `POST` | `/assets/{asset_id}/versions/upload` | Upload a binary payload, automatically storing to the depot volume and creating a new version. |
 | `GET` | `/reviews/pending` | Fetch pending reviews for dashboards or DCC overlays. |
 | `PATCH` | `/reviews/{review_id}` | Update review status/comments from tool UIs. |
 | `POST` | `/locks` | Claim an asset lock for binary editing workflows. |
 | `DELETE` | `/locks/{asset_id}` | Release an existing lock (admins can override any lock). |
+| `GET` | `/projects/{project_id}/branches` | Enumerate streams/branches for workspace targeting. |
+| `POST` | `/projects/{project_id}/branches` | Create a new branch (records creator and parent). |
+| `PATCH` | `/branches/{branch_id}` | Rename or describe an existing branch. |
+| `GET` | `/projects/{project_id}/shelves` | List shelved changelists for review or restoration. |
+| `POST` | `/shelves` | Create a shelf linked to a workspace and asset version. |
+| `DELETE` | `/shelves/{shelf_id}` | Remove a shelf (owner or admin only). |
+| `GET` | `/projects/{project_id}/permissions` | Inspect explicit grants on a project (admin only). |
+| `POST` | `/projects/{project_id}/permissions` | Create or update project-level permissions (admin only). |
+| `PUT` | `/permissions/{permission_id}` | Adjust an existing permission record (admin only). |
+| `DELETE` | `/permissions/{permission_id}` | Revoke a permission grant (admin only). |
 
-Plugins should set the `Authorization: Bearer <token>` header on all requests. The service automatically calls `set_app_user` so database RLS policies apply without additional plugin logic.
+Plugins should set the `Authorization: Bearer <token>` header on all requests. The service automatically calls `set_app_user` so database RLS policies apply without additional plugin logic. The shared Python REST client and Unity editor script demonstrate this handshake end-to-end.
+
+### Reference Implementations Updated
+
+- **Unity Editor package** (under `plugins/unity`): now authenticates via `/auth/token`, queries `/projects/{project_id}/assets`, and writes imported asset manifests to the local project. Artists can browse and pull latest versions without leaving the editor.
+- **Common REST client** (under `plugins/common`): handles token caching, project-scoped asset queries, branch management, shelf creation, and permission management so new host integrations can focus on UI concerns.
 
 ## Autodesk Maya
 

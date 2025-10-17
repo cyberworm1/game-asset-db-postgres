@@ -19,8 +19,17 @@ plugins/unity/
 
 1. Copy the `plugins/unity` folder into your Unity project's `Packages`
    directory or add it as a local package via the Package Manager.
-2. Configure the Game Asset Database settings under **Edit → Project Settings
-   → Game Asset Database**.
+2. Launch the **Window → Game Asset DB** panel and click **Refresh** to
+   automatically scaffold a per-user config file at
+   `%APPDATA%/GameAssetDB/config.json` (Windows) or `~/.config/game-asset-db/config.json`
+   (macOS/Linux).
+3. Edit the generated `config.json` and supply the following fields:
+   - `api_base_url`: Base URL of the running FastAPI service.
+   - `project_id`: UUID of the project to browse.
+   - `username`/`password`: Studio credentials used for `/auth/token`.
+
+Imported assets are written to `Assets/GameAssetDb/<AssetName>/asset.json` so
+projects can version-control the retrieved metadata or trigger custom importers.
 
 ## Distribution
 

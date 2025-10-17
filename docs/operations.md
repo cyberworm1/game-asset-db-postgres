@@ -40,6 +40,25 @@ The `scripts/create-replica.sh` helper performs a `pg_basebackup` and configures
    pg_ctl promote -D /var/lib/postgresql/data
    ```
 
+## Replica Health Automation
+
+- Schedule `scripts/replica_health_check.sh` via cron (e.g., every 5 minutes) against each standby. The script emits JSON logs that can feed Loki/FluentBit and optionally promotes a replica if `--promote-on-failure` is supplied.
+- Configure `REPLAY_LAG_THRESHOLD_SECONDS` to the maximum lag tolerated by downstream teams. Default is 120 seconds.
+- Forward the JSON output to your monitoring stack to drive alerts on `status != "healthy"`.
+
+Example cron entry:
+
+```
+*/5 * * * * /opt/game-asset-db/scripts/replica_health_check.sh \
+  "postgres://replica:secret@standby:5432/postgres" >> /var/log/game-asset-db/replica.log 2>&1
+```
+
+## Backup Verification Drills
+
+- Add a weekly job that restores the most recent base backup into an ephemeral container and runs `SELECT COUNT(*) FROM assets;` as a smoke test.
+- Use the `scripts/restore.sh` helper in CI to ensure WAL archives replay successfully before expiring older backups.
+- Record restore outcomes in the ops wiki for auditing.
+
 ## Disaster Recovery Checklist
 
 - [ ] Confirm last successful automated backup in `./backups`.
@@ -51,7 +70,7 @@ The `scripts/create-replica.sh` helper performs a `pg_basebackup` and configures
 ## Monitoring Hooks
 
 - The FastAPI service exposes `/health` for container orchestration health checks.
-- Postgres metrics can be scraped by adding `postgres_exporter`; see TODO in this doc if more observability is required.
+- Postgres metrics can be scraped by adding `postgres_exporter`; pair this with the replica health script for end-to-end visibility.
 
 ## Auth & Permission Notes
 

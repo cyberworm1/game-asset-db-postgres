@@ -13,16 +13,14 @@ _client: GameAssetDbClient | None = None
 
 
 def ensure_authenticated_client() -> GameAssetDbClient:
-    """Return a cached REST client with a valid OAuth token."""
+    """Return a cached REST client with a valid bearer token."""
 
     global _client
     if _client is None:
         _client = GameAssetDbClient()
         LOGGER.debug("Created new GameAssetDbClient for Maya plugin")
 
-    if _client._token is None or _client._token.is_expired:  # type: ignore[attr-defined]
-        LOGGER.debug("Refreshing OAuth token for Maya plugin")
-        _client.refresh_token()
+    _client.ensure_token()
     return _client
 
 

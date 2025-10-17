@@ -27,8 +27,14 @@ def show_asset_browser() -> None:
         except Exception as exc:  # noqa: BLE001 - display message box
             rt.messageBox(f"Failed to load assets: {exc}")
             return
-        dialog.assetList.items = [asset.get("name", "Unnamed") for asset in payload.get("items", [])]
-        dialog.assetList.tag = json.dumps(payload.get("items", []))
+        items = payload.get("items", [])
+        display_items = []
+        for asset in items:
+            versions = asset.get("versions", []) or []
+            latest_version = versions[-1]["version_number"] if versions else "-"
+            display_items.append(f"{asset.get('name', 'Unnamed')} (v{latest_version})")
+        dialog.assetList.items = display_items
+        dialog.assetList.tag = json.dumps(items)
         LOGGER.info("Loaded assets into 3ds Max browser")
 
     def import_selected(*_args):
@@ -39,9 +45,12 @@ def show_asset_browser() -> None:
         items = json.loads(dialog.assetList.tag or "[]")
         asset = items[index]
         client = GameAssetDbClient()
-        client.import_asset(asset["id"])
-        cache_directory()
-        LOGGER.info("Requested import for asset %s", asset["id"])
+        detail = client.import_asset(asset["id"])
+        cache_dir = cache_directory()
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_path = cache_dir / f"{asset.get('name', asset['id'])}_metadata.json"
+        cache_path.write_text(json.dumps(detail, indent=2, default=str), encoding="utf-8")
+        LOGGER.info("Cached metadata for asset %s at %s", asset["id"], cache_path)
 
     dialog.refreshButton.pressed = refresh_assets
     dialog.importButton.pressed = import_selected

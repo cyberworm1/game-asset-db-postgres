@@ -13,6 +13,7 @@ class TokenRequest(BaseModel):
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
+    expires_in: int = 3600
 
 
 class AssetCreate(BaseModel):
@@ -44,7 +45,106 @@ class AssetResponse(BaseModel):
     project_id: UUID
     metadata: dict
     created_by: Optional[UUID]
-    versions: List[AssetVersionResponse] = []
+    versions: List[AssetVersionResponse] = Field(default_factory=list)
+
+
+class ProjectCreate(BaseModel):
+    name: str
+    code: str
+    description: Optional[str]
+    status: Optional[str]
+    storage_quota_tb: Optional[float]
+    storage_provider: Optional[str]
+    storage_location: Optional[str]
+
+
+class ProjectUpdate(BaseModel):
+    name: Optional[str]
+    description: Optional[str]
+    status: Optional[str]
+    storage_quota_tb: Optional[float]
+    storage_provider: Optional[str]
+    storage_location: Optional[str]
+    archived: Optional[bool]
+
+
+class ProjectResponse(BaseModel):
+    id: UUID
+    name: str
+    code: str
+    description: Optional[str]
+    status: str
+    storage_quota_tb: float
+    storage_provider: Optional[str]
+    storage_location: Optional[str]
+    archived_at: Optional[datetime]
+    archived_by: Optional[UUID]
+    created_at: datetime
+    updated_at: datetime
+
+
+class BranchCreate(BaseModel):
+    name: str
+    description: Optional[str]
+    parent_branch_id: Optional[UUID]
+
+
+class BranchUpdate(BaseModel):
+    name: Optional[str]
+    description: Optional[str]
+
+
+class BranchResponse(BaseModel):
+    id: UUID
+    project_id: UUID
+    name: str
+    description: Optional[str]
+    parent_branch_id: Optional[UUID]
+    created_by: Optional[UUID]
+    created_at: datetime
+
+
+class ShelfCreate(BaseModel):
+    workspace_id: UUID
+    asset_version_id: UUID
+    description: Optional[str]
+
+
+class ShelfResponse(BaseModel):
+    id: UUID
+    workspace_id: UUID
+    asset_version_id: UUID
+    created_by: UUID
+    created_at: datetime
+    description: Optional[str]
+
+
+class PermissionBase(BaseModel):
+    user_id: UUID
+    asset_id: Optional[UUID]
+    read: bool = True
+    write: bool = False
+    delete: bool = False
+
+
+class PermissionCreate(PermissionBase):
+    project_id: UUID
+
+
+class PermissionUpdate(BaseModel):
+    read: Optional[bool]
+    write: Optional[bool]
+    delete: Optional[bool]
+
+
+class PermissionResponse(BaseModel):
+    id: UUID
+    project_id: UUID
+    asset_id: Optional[UUID]
+    user_id: UUID
+    read: bool
+    write: bool
+    delete: bool
 
 
 class ReviewResponse(BaseModel):

@@ -16,8 +16,9 @@ from typing import Any, Dict
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "api_base_url": "https://game-asset-db.example.com/api",
-    "client_id": "",
-    "client_secret": "",
+    "username": "artist",
+    "password": "changeme",
+    "project_id": "",
     "cache_directory": "",
     "log_level": "INFO",
 }
