@@ -43,6 +43,9 @@ services:
       ASSET_STORAGE_PATH: /var/lib/asset-depot
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
+      # Optional OpenCue integration (comma-separated host:port list)
+      OPENCUE_HOSTS: ""
+      OPENCUE_DEFAULT_SHOW: ""
     volumes:
       - asset_depot:/var/lib/asset-depot
     ports:
@@ -60,6 +63,8 @@ services:
       ASSET_STORAGE_PATH: /var/lib/asset-depot
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
+      OPENCUE_HOSTS: ""
+      OPENCUE_DEFAULT_SHOW: ""
     volumes:
       - asset_depot:/var/lib/asset-depot
 
