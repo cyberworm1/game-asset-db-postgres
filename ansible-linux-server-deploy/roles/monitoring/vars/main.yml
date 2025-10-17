@@ -1,3 +1,4 @@
 ---
-# Vars for Monitoring
-# Extend for full Prometheus setup
+monitoring_enable_grafana: false
+prometheus_textfile_dir: /var/lib/node_exporter/textfile
+asset_service_metrics_target: "localhost:8000"

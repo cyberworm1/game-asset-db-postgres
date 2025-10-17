@@ -1,0 +1,40 @@
+---
+- name: Install repmgr
+  apt:
+    name: repmgr
+    state: present
+    update_cache: yes
+
+- name: Ensure automation directory exists
+  file:
+    path: /opt/game-asset-db/bin
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Deploy failover controller script
+  copy:
+    src: "{{ playbook_dir }}/../scripts/failover_controller.py"
+    dest: /opt/game-asset-db/bin/failover_controller.py
+    mode: "0755"
+
+- name: Configure failover systemd service
+  template:
+    src: failover.service.j2
+    dest: /etc/systemd/system/game-asset-failover.service
+    mode: "0644"
+  notify: Reload systemd units
+
+- name: Configure failover systemd timer
+  template:
+    src: failover.timer.j2
+    dest: /etc/systemd/system/game-asset-failover.timer
+    mode: "0644"
+  notify: Reload systemd units
+
+- name: Enable automated failover timer
+  systemd:
+    name: game-asset-failover.timer
+    state: started
+    enabled: yes

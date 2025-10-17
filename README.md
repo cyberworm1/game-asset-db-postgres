@@ -8,10 +8,10 @@ This repository provides a PostgreSQL-based database and service stack for manag
 - **Binary Depot Service**: A FastAPI-powered application server that exposes REST APIs, file upload endpoints, and a lightweight web review dashboard backed by a deduplicated, compressed storage volume with optional replica mirroring.
 - **Branching & Workspaces**: Branch, workspace, shelf, and asset locking semantics inspired by Helix stream/workspace flows.
 - **Changelists & Submit Validation**: Atomic changelists bundle multiple asset versions with submit-time validation and shelf linkage so reviews happen on coherent sets of work.
-- **Merge Orchestration**: Branch merge tracking now seeds auto-integrate, conflict staging, and submit-gate jobs; merges cannot complete until submit gates pass and conflicts are resolved, mirroring Helix stream safeguards.
+- **Merge Orchestration**: Branch merge tracking now seeds auto-integrate, conflict staging, and submit-gate jobs; merges cannot complete until submit gates pass and conflicts are resolved, mirroring Helix stream safeguards. Celery-powered workers execute queued jobs automatically via Redis so merge jobs no longer require manual polling.
 - **Admin & Branch APIs**: FastAPI endpoints now cover project provisioning, branch/shelf management, and permission administration so Helix-equivalent concepts live beyond raw SQL tables.
 - **Storage Planning**: Project storage snapshots to plan for the default 10TB allocation with room to scale.
-- **Operations**: Docker Compose adds scheduled backups, pgAdmin for administration, and scripts for replication & disaster recovery runbooks—including `operations_automation.py` for nightly health verification.
+- **Operations & Observability**: Docker Compose now includes Redis, a Celery worker, Prometheus, and an optional Grafana profile so runbook automation, replica health logs, and FastAPI metrics flow into dashboards instead of ad-hoc cron emails.
 - **Tuning**: Guide for performance in high-load scenarios (e.g., during asset uploads for game builds).
 - **Sample Data**: Pre-populated with demo assets, branches, workspaces, and locks for testing.
 
@@ -22,7 +22,7 @@ This repository provides a PostgreSQL-based database and service stack for manag
 ## Setup Instructions
 1. Clone the repo: `git clone https://github.com/yourusername/game-asset-db-postgres.git`
 2. Navigate to the directory: `cd game-asset-db-postgres`
-3. Start the stack (database, depot API, pgAdmin, backup service): `docker-compose up -d`
+3. Start the stack (database, depot API, Celery worker, Redis, Prometheus, pgAdmin, backup service): `docker-compose up -d`. Add `--profile grafana` if you want the bundled Grafana dashboards.
 4. Connect to the DB: `psql -h localhost -U postgres -d asset_db` (password: `password`)
 5. Init schema & policies: The `init-db` scripts are automatically run via Docker volume mounting (including RLS policy creation).
 6. Insert sample data: Run `psql -h localhost -U postgres -d asset_db -f init-db/04-sample-data.sql` if you want to re-seed data.
@@ -71,7 +71,7 @@ Copy `configs/postgresql.conf` and `pg_hba.conf` to your Postgres data dir for p
 - Restore: `./scripts/restore.sh <backup_file>`
 - Replication & failover: see `docs/operations.md` and `scripts/create-replica.sh` for a pg_basebackup-driven replica bootstrap example.
 
-See `docs/performance-tuning.md` for optimization tips and `docs/operations.md` for operational procedures.
+See `docs/performance-tuning.md` for optimization tips and `docs/operations.md` for operational procedures including merge automation, observability wiring, replica lifecycle management, and automated failover orchestration.
 
 ## Contributing
 Fork and PR improvements, e.g., adding ORM integration.

@@ -155,6 +155,57 @@ def check_service_health(url: Optional[str], timeout: int) -> Dict[str, Any]:
     return report
 
 
+def write_prometheus_metrics(summary: Dict[str, Any], directory: Path) -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
+    metrics_path = directory / "asset_depot_ops.prom"
+    results = summary.get("results", {})
+
+    def status_value(key: str) -> int:
+        return 1 if results.get(key, {}).get("status") == "passed" else 0
+
+    def extract_detail(key: str, detail: str, default: float = 0.0) -> float:
+        value = results.get(key, {}).get("details", {}).get(detail, default)
+        if isinstance(value, (int, float)):
+            return float(value)
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    execution = results.get("replica_health", {}).get("details", {}).get("execution", {}) or {}
+    duration_val = 0.0
+    if isinstance(execution, dict):
+        duration_raw = execution.get("duration_seconds")
+        try:
+            duration_val = float(duration_raw)
+        except (TypeError, ValueError):
+            duration_val = 0.0
+
+    lines = [
+        "# HELP asset_depot_backup_status 1 indicates the most recent backup verification succeeded",
+        "# TYPE asset_depot_backup_status gauge",
+        f"asset_depot_backup_status {status_value('backup_verification')}",
+        "# HELP asset_depot_backup_latest_size_bytes Size of the latest logical backup in bytes",
+        "# TYPE asset_depot_backup_latest_size_bytes gauge",
+        f"asset_depot_backup_latest_size_bytes {extract_detail('backup_verification', 'size_bytes')}",
+        "# HELP asset_depot_wal_archive_freshness_seconds Age of the newest WAL archive file in seconds",
+        "# TYPE asset_depot_wal_archive_freshness_seconds gauge",
+        f"asset_depot_wal_archive_freshness_seconds {extract_detail('wal_archive', 'age_seconds')}",
+        "# HELP asset_depot_replica_health_status 1 indicates replica health check passed",
+        "# TYPE asset_depot_replica_health_status gauge",
+        f"asset_depot_replica_health_status {status_value('replica_health')}",
+        "# HELP asset_depot_replica_check_duration_seconds Duration of the replica health probe",
+        "# TYPE asset_depot_replica_check_duration_seconds gauge",
+        f"asset_depot_replica_check_duration_seconds {duration_val}",
+        "# HELP asset_depot_service_health_status 1 indicates the HTTP service health endpoint succeeded",
+        "# TYPE asset_depot_service_health_status gauge",
+        f"asset_depot_service_health_status {status_value('service_health')}",
+    ]
+
+    metrics_path.write_text("\n".join(str(line) for line in lines) + "\n")
+    return metrics_path
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Automate operational runbooks")
     parser.add_argument(
@@ -206,6 +257,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Optional path to write the JSON report",
     )
+    parser.add_argument(
+        "--prometheus-textfile-dir",
+        type=Path,
+        help="Directory for Prometheus textfile collector metrics",
+    )
     return parser
 
 
@@ -230,6 +286,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
 
     failed = any(result.get("status") == "failed" for result in summary["results"].values())
+
+    if args.prometheus_textfile_dir:
+        metrics_path = write_prometheus_metrics(summary, args.prometheus_textfile_dir)
+        summary["results"]["prometheus_metrics"] = {
+            "status": "written",
+            "path": str(metrics_path),
+        }
 
     payload = json.dumps(summary, indent=2)
     print(payload)

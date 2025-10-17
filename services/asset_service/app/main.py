@@ -8,10 +8,12 @@ from uuid import UUID
 from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
+from prometheus_fastapi_instrumentator import Instrumentator
 from psycopg.rows import dict_row
 
 from .auth import authenticate_user, create_access_token, get_current_user, set_rls_user
 from .database import get_connection
+from .merge_worker import enqueue_many, enqueue_merge_job
 from .schemas import (
     AssetCreate,
     AssetResponse,
@@ -52,6 +54,7 @@ from .schemas import (
 from .storage import save_asset_file
 
 app = FastAPI(title="Asset Depot Service", version="1.0.0")
+Instrumentator().instrument(app).expose(app, include_in_schema=False)
 
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
@@ -961,6 +964,8 @@ def list_branch_merges(project_id: UUID, current_user: dict = Depends(get_curren
 def create_branch_merge(payload: BranchMergeCreate, current_user: dict = Depends(get_current_user)):
     if payload.source_branch_id == payload.target_branch_id:
         raise HTTPException(status_code=400, detail="Source and target branches must differ")
+    queued_job_ids: List[str] = []
+    response: Optional[BranchMergeResponse] = None
     with get_connection() as conn:
         try:
             set_rls_user(conn, current_user["id"])
@@ -1000,9 +1005,13 @@ def create_branch_merge(payload: BranchMergeCreate, current_user: dict = Depends
                         """
                         INSERT INTO merge_jobs (branch_merge_id, job_type)
                         VALUES (%s, %s)
+                        RETURNING id
                         """,
                         (str(merge_id), "auto_integrate"),
                     )
+                    job_row = cur.fetchone()
+                    if job_row:
+                        queued_job_ids.append(str(job_row["id"]))
                 if payload.stage_conflicts:
                     cur.execute(
                         """
@@ -1016,9 +1025,13 @@ def create_branch_merge(payload: BranchMergeCreate, current_user: dict = Depends
                         """
                         INSERT INTO merge_jobs (branch_merge_id, job_type)
                         VALUES (%s, %s)
+                        RETURNING id
                         """,
                         (str(merge_id), "submit_gate"),
                     )
+                    job_row = cur.fetchone()
+                    if job_row:
+                        queued_job_ids.append(str(job_row["id"]))
 
                 cur.execute(
                     """
@@ -1030,14 +1043,18 @@ def create_branch_merge(payload: BranchMergeCreate, current_user: dict = Depends
                     (str(merge_id),),
                 )
                 merge_row = cur.fetchone()
+                response = _branch_merge_row_to_response(merge_row)
                 conn.commit()
-                return _branch_merge_row_to_response(merge_row)
         except HTTPException:
             conn.rollback()
             raise
         except Exception as exc:
             conn.rollback()
             raise HTTPException(status_code=500, detail=str(exc)) from exc
+    enqueue_many(queued_job_ids)
+    if response is None:
+        raise HTTPException(status_code=500, detail="Failed to create branch merge")
+    return response
 
 
 @app.patch("/branch-merges/{merge_id}", response_model=BranchMergeResponse, tags=["branch-merges"])
@@ -1272,6 +1289,8 @@ def create_merge_job(merge_id: UUID, payload: MergeJobCreate, current_user: dict
 
     submit_gate_passed = payload.submit_gate_passed if payload.job_type == "submit_gate" else False
 
+    queued_job_id: Optional[str] = None
+    response: Optional[MergeJobResponse] = None
     with get_connection() as conn:
         try:
             set_rls_user(conn, current_user["id"])
@@ -1301,13 +1320,19 @@ def create_merge_job(merge_id: UUID, payload: MergeJobCreate, current_user: dict
                 )
                 row = cur.fetchone()
                 conn.commit()
-                return _merge_job_row_to_response(row)
+                response = _merge_job_row_to_response(row)
+                queued_job_id = str(row["id"]) if job_status == "queued" else None
         except HTTPException:
             conn.rollback()
             raise
         except Exception as exc:
             conn.rollback()
             raise HTTPException(status_code=500, detail=str(exc)) from exc
+    if queued_job_id:
+        enqueue_merge_job(queued_job_id)
+    if response is None:
+        raise HTTPException(status_code=500, detail="Failed to create merge job")
+    return response
 
 
 @app.patch("/merge-jobs/{job_id}", response_model=MergeJobResponse, tags=["branch-merges"])
@@ -1315,12 +1340,16 @@ def update_merge_job(job_id: UUID, payload: MergeJobUpdate, current_user: dict =
     updates: List[str] = []
     params: List[Any] = []
     new_status: Optional[str] = None
+    queue_after_update = False
+    response: Optional[MergeJobResponse] = None
     if payload.status is not None:
         if payload.status not in MERGE_JOB_STATUSES:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported merge job status")
         updates.append("status = %s")
         params.append(payload.status)
         new_status = payload.status
+        if payload.status == "queued":
+            queue_after_update = True
     if payload.conflict_snapshot is not None:
         updates.append("conflict_snapshot = %s::jsonb")
         params.append(json.dumps(payload.conflict_snapshot))
@@ -1364,13 +1393,18 @@ def update_merge_job(job_id: UUID, payload: MergeJobUpdate, current_user: dict =
                 if not row:
                     raise HTTPException(status_code=404, detail="Merge job not found")
                 conn.commit()
-                return _merge_job_row_to_response(row)
+                response = _merge_job_row_to_response(row)
         except HTTPException:
             conn.rollback()
             raise
         except Exception as exc:
             conn.rollback()
             raise HTTPException(status_code=500, detail=str(exc)) from exc
+    if queue_after_update:
+        enqueue_merge_job(str(job_id))
+    if response is None:
+        raise HTTPException(status_code=500, detail="Failed to update merge job")
+    return response
 
 
 @app.get("/projects/{project_id}/permissions", response_model=List[PermissionResponse], tags=["permissions"])

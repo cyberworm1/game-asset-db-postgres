@@ -1,15 +1,64 @@
 ---
-# Monitoring Tasks
-# Author: [Your Name]
-# Description: Sets up basic monitoring for performance tracking in game servers.
-
-- name: Install Prometheus node exporter
+- name: Install Prometheus components
   apt:
-    name: prometheus-node-exporter
+    name:
+      - prometheus
+      - prometheus-node-exporter
     state: present
+    update_cache: yes
 
-- name: Ensure node exporter is running
+- name: Deploy Prometheus configuration
+  template:
+    src: prometheus.yml.j2
+    dest: /etc/prometheus/prometheus.yml
+    owner: prometheus
+    group: prometheus
+    mode: "0644"
+  notify: Restart prometheus
+
+- name: Ensure Prometheus service is enabled
+  service:
+    name: prometheus
+    state: started
+    enabled: yes
+
+- name: Ensure node exporter service is enabled
   service:
     name: prometheus-node-exporter
+    state: started
+    enabled: yes
+
+- name: Create textfile collector directory
+  file:
+    path: "{{ prometheus_textfile_dir }}"
+    state: directory
+    owner: prometheus
+    group: prometheus
+    mode: "0755"
+
+- name: Add Grafana repository key
+  when: monitoring_enable_grafana
+  ansible.builtin.get_url:
+    url: https://packages.grafana.com/gpg.key
+    dest: /usr/share/keyrings/grafana.gpg
+    mode: "0644"
+
+- name: Configure Grafana repository
+  when: monitoring_enable_grafana
+  ansible.builtin.apt_repository:
+    repo: "deb [signed-by=/usr/share/keyrings/grafana.gpg] https://packages.grafana.com/oss/deb stable main"
+    filename: grafana
+    state: present
+
+- name: Install Grafana (optional)
+  when: monitoring_enable_grafana
+  apt:
+    name: grafana
+    state: present
+
+- name: Ensure Grafana service is running when installed
+  when: monitoring_enable_grafana
+  service:
+    name: grafana-server
     state: started
     enabled: yes

@@ -50,7 +50,8 @@ The `scripts/create-replica.sh` helper performs a `pg_basebackup` and configures
 
 - Schedule `scripts/replica_health_check.sh` via cron (e.g., every 5 minutes) against each standby. The script emits JSON logs that can feed Loki/FluentBit and optionally promotes a replica if `--promote-on-failure` is supplied.
 - Configure `REPLAY_LAG_THRESHOLD_SECONDS` to the maximum lag tolerated by downstream teams. Default is 120 seconds.
-- Forward the JSON output to your monitoring stack to drive alerts on `status != "healthy"`.
+- Set `LOGGER_PATH` to a log file harvested by your log stack and `PROMETHEUS_TEXTFILE` to the node exporter textfile collector directory (e.g., `/var/lib/node_exporter/textfile/replica.prom`) so the same probe populates structured logs and Prometheus metrics.
+- Forward the JSON output to your monitoring stack and alert when `status != "healthy"`.
 
 Example cron entry:
 
@@ -65,19 +66,42 @@ Example cron entry:
 - Use the `scripts/restore.sh` helper in CI to ensure WAL archives replay successfully before expiring older backups.
 - Record restore outcomes in the ops wiki for auditing.
 
-## Automated Runbooks
+## Automated Runbooks & Metrics
 
-- Use `scripts/operations_automation.py` to orchestrate nightly maintenance. The script validates the newest logical backup with `pg_restore --list`, checks WAL archive freshness, pings the service health endpoint, and proxies `scripts/replica_health_check.sh`.
-- Example cron entry writing a JSON report:
+- Use `scripts/operations_automation.py` to orchestrate nightly maintenance. The script validates the newest logical backup with `pg_restore --list`, checks WAL archive freshness, pings the service health endpoint, proxies `scripts/replica_health_check.sh`, and now emits Prometheus-compatible gauges when `--prometheus-textfile-dir` is specified.
+- Example cron entry writing both a JSON report and metrics scrape file:
 
   ```
   0 1 * * * /opt/game-asset-db/scripts/operations_automation.py \
       --backup-dir /opt/game-asset-db/backups \
       --archive-dir /opt/game-asset-db/backups/wal \
       --replica-url "postgres://replica:secret@standby:5432/postgres" \
+      --prometheus-textfile-dir /var/lib/node_exporter/textfile \
       --output /var/log/game-asset-db/ops-report.json >>/var/log/game-asset-db/ops.log 2>&1
   ```
-- Treat the JSON payload as an observability feed—ship it to Loki, Splunk, or Grafana Loki to mirror the integrated dashboards available in Helix Core.
+- Treat the JSON payload as an observability feed—ship it to Loki, Splunk, or Grafana Loki—and allow Prometheus to ingest the generated textfile for dashboards and alerting.
+
+## Automated Merge Workers
+
+- Celery workers now orchestrate `/branch-merges` jobs without manual polling. Redis backs the queue; the FastAPI service enqueues jobs when merges or additional jobs are created.
+- Set `CELERY_BROKER_URL`/`CELERY_RESULT_BACKEND` for the API and worker containers (defaults are provided in `docker-compose.yml`). The automation uses `MERGE_AUTOMATION_USER_ID` when supplied or falls back to the first admin account to satisfy RLS.
+- Inspect worker logs via `docker compose logs merge-worker` (or `journalctl -u game-asset-failover.service` on bare metal) to confirm auto-integrate and submit-gate tasks complete. Failed jobs transition branch merges to `conflicted` so human triage mirrors Helix’s merge gatekeeping.
+
+## Observability Stack
+
+- `docker-compose.yml` provisions Prometheus, node exporter, Redis, the Celery merge worker, and an optional Grafana profile (`docker compose --profile grafana up -d`).
+- Prometheus scrapes FastAPI metrics (`/metrics`), node exporter host data, and the textfile collector fed by `operations_automation.py` and `replica_health_check.sh`. Mount `./observability/textfile` into operations cronjobs when running on Docker hosts.
+- The Ansible `monitoring` role installs the same stack on bare-metal/VMs, writing metrics to `{{ prometheus_textfile_dir }}` and optionally installing Grafana when `monitoring_enable_grafana` is true.
+
+## Replica Lifecycle & Integrity Management
+
+- Run `scripts/object_store_replica.py --primary /var/lib/asset-depot --replica /mnt/object-store-mirror --retention-days 365 --manifest /var/log/game-asset-db/replica_audit.json` to enforce retention, prune orphaned mirror files, and verify parity.
+- Use `--full-hash` for deep integrity sweeps when bandwidth/storage allow. The JSON manifest records mismatches so you can trigger re-sync jobs or escalate to storage teams.
+
+## Automated Failover Orchestration
+
+- `scripts/failover_controller.py` provides a repmgr-aware failover loop. Point `--dsn` at the current primary, set `--post-promote-follow` to rejoin the cluster after promotion, and hand the script to `systemd` or Kubernetes CronJobs for continuous readiness.
+- The new Ansible `failover` role installs repmgr, deploys the controller script to `/opt/game-asset-db/bin`, and schedules `game-asset-failover.timer` to run at the cadence defined by `failover_timer_interval`.
 
 ## Disaster Recovery Checklist
 
@@ -108,7 +132,5 @@ Example cron entry:
 
 ## Future Enhancements
 
-- Add Prometheus/Grafana stack.
-- Extend the merge job queue with worker automation (Celery/Arq) to execute `auto_integrate` runs server-side.
-- Expand object storage replication with lifecycle policies (e.g., S3 Intelligent-Tiering) for long-term archive hygiene.
-- Automate switchover with Patroni or repmgr for clustered deployments.
+- Wire Grafana dashboards and alert rules into the repository so new environments inherit curated visualizations.
+- Extend merge workers with per-project job plugins (e.g., launching asset validation microservices) beyond the default pipeline.

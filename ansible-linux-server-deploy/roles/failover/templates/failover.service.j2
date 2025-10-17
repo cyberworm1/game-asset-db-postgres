@@ -1,0 +1,19 @@
+[Unit]
+Description=Game Asset DB automated failover probe
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/game-asset-db/bin/failover_controller.py \
+  --dsn "{{ failover_dsn }}" \
+  --repmgr-bin "{{ failover_repmgr_bin }}" \
+  --health-attempts {{ failover_health_attempts }} \
+  --health-interval {{ failover_health_interval }}{% if failover_post_promote_follow %} \
+  --post-promote-follow{% endif %}
+User=root
+Group=root
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
