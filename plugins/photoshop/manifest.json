@@ -1,0 +1,18 @@
+{
+  "manifestVersion": 5,
+  "id": "com.gameassetdb.photoshop",
+  "name": "Game Asset Database",
+  "version": "1.0.0",
+  "host": {
+    "app": "photoshop",
+    "minVersion": "23.0.0"
+  },
+  "entryPoints": [
+    {
+      "type": "panel",
+      "id": "gameAssetDbPanel",
+      "label": "Game Asset DB",
+      "main": "src/main.js"
+    }
+  ]
+}

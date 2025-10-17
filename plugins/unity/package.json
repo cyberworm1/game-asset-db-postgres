@@ -1,0 +1,11 @@
+{
+  "name": "com.gameassetdb.editor",
+  "version": "1.0.0",
+  "displayName": "Game Asset Database",
+  "description": "Integrates the Game Asset Database service into the Unity Editor.",
+  "unity": "2020.3",
+  "author": {
+    "name": "Game Asset DB Team",
+    "email": "support@example.com"
+  }
+}
