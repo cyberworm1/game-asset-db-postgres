@@ -7,7 +7,68 @@ services:
       POSTGRES_DB: asset_db
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: password
+      PGDATA: /var/lib/postgresql/data/pgdata
     ports:
       - "5432:5432"
     volumes:
       - ./init-db:/docker-entrypoint-initdb.d
+      - postgres_data:/var/lib/postgresql/data
+    command:
+      - "postgres"
+      - "-c"
+      - "wal_level=replica"
+      - "-c"
+      - "max_wal_senders=10"
+      - "-c"
+      - "archive_mode=on"
+      - "-c"
+      - "archive_command=\"test ! -f /var/lib/postgresql/data/archive/%f && cp %p /var/lib/postgresql/data/archive/%f\""
+    tmpfs:
+      - /var/lib/postgresql/data/archive:uid=999,gid=999
+
+  asset-service:
+    build: ./services/asset_service
+    depends_on:
+      - db
+    environment:
+      DATABASE_URL: postgresql://postgres:password@db:5432/asset_db
+      JWT_SECRET: super-secret-dev-key
+      ASSET_STORAGE_PATH: /var/lib/asset-depot
+    volumes:
+      - asset_depot:/var/lib/asset-depot
+    ports:
+      - "8000:8000"
+
+  pgadmin:
+    image: dpage/pgadmin4:8.3
+    depends_on:
+      - db
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@example.com
+      PGADMIN_DEFAULT_PASSWORD: admin123
+    ports:
+      - "8080:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+
+  pgbackups:
+    image: prodrigestivill/postgres-backup-local:16
+    restart: always
+    depends_on:
+      - db
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_DB: asset_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      SCHEDULE: "0 3 * * *"
+      BACKUP_KEEP_DAYS: 7
+      BACKUP_KEEP_WEEKS: 4
+      BACKUP_KEEP_MONTHS: 6
+    volumes:
+      - ./backups:/backups
+
+volumes:
+  postgres_data:
+  asset_depot:
+  pgadmin_data:

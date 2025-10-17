@@ -13,6 +13,23 @@ All plugins should share the following traits:
 - **Logging:** Write structured logs to the host application's logging facility, with an option to forward diagnostic bundles to the central ops team.
 - **Packaging:** Provide signed installers or extension bundles for Windows, macOS, and Linux when the host application supports the platform.
 
+### REST Endpoints Now Available
+
+The asset depot service (FastAPI) ships with authenticated endpoints that plugins can call today:
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/auth/token` | Retrieve a bearer token using studio credentials. |
+| `GET` | `/projects/{project_id}/assets` | List accessible assets plus their versions (RLS enforced). |
+| `POST` | `/assets` | Create a new asset record. |
+| `POST` | `/assets/{asset_id}/versions/upload` | Upload a binary payload, automatically storing to the depot volume and creating a new version. |
+| `GET` | `/reviews/pending` | Fetch pending reviews for dashboards or DCC overlays. |
+| `PATCH` | `/reviews/{review_id}` | Update review status/comments from tool UIs. |
+| `POST` | `/locks` | Claim an asset lock for binary editing workflows. |
+| `DELETE` | `/locks/{asset_id}` | Release an existing lock (admins can override any lock). |
+
+Plugins should set the `Authorization: Bearer <token>` header on all requests. The service automatically calls `set_app_user` so database RLS policies apply without additional plugin logic.
+
 ## Autodesk Maya
 
 - **Languages:** Python 2/3 (via `maya.cmds` and `PySide2`), with optional C++ nodes for performance-critical tasks.
