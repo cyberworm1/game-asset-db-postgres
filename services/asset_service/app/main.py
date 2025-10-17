@@ -14,6 +14,7 @@ from psycopg.rows import dict_row
 from .auth import authenticate_user, create_access_token, get_current_user, set_rls_user
 from .database import get_connection
 from .merge_worker import enqueue_many, enqueue_merge_job
+from .opencue_integration import integration as opencue_integration
 from .schemas import (
     AssetCreate,
     AssetResponse,
@@ -37,6 +38,8 @@ from .schemas import (
     MergeJobCreate,
     MergeJobResponse,
     MergeJobUpdate,
+    OpenCueDetailedResponse,
+    OpenCueSummaryResponse,
     PermissionCreate,
     PermissionResponse,
     PermissionUpdate,
@@ -1723,6 +1726,35 @@ async def upload_asset_version(
         except Exception as exc:
             conn.rollback()
             raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.get(
+    "/render/opencue/summary",
+    response_model=OpenCueSummaryResponse,
+    tags=["render"],
+)
+def get_opencue_summary(current_user: dict = Depends(get_current_user)):
+    payload = opencue_integration.get_summary()
+    return OpenCueSummaryResponse(
+        enabled=payload["enabled"],
+        available=payload["available"],
+        summary=payload["summary"],
+        last_updated=payload["last_updated"],
+        source=payload.get("source"),
+        message=payload.get("message"),
+    )
+
+
+@app.get(
+    "/render/opencue/details",
+    response_model=OpenCueDetailedResponse,
+    tags=["render"],
+)
+def get_opencue_details(current_user: dict = Depends(get_current_user)):
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+    payload = opencue_integration.get_details()
+    return OpenCueDetailedResponse(**payload)
 
 
 @app.get("/reviews/pending", response_model=List[ReviewResponse], tags=["reviews"])

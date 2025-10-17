@@ -300,3 +300,40 @@ class WorkspaceCreate(BaseModel):
     branch_id: Optional[UUID]
     name: str
     description: Optional[str]
+
+
+class RenderStatusSummary(BaseModel):
+    cued: int = 0
+    running: int = 0
+    success: int = 0
+    fail: int = 0
+
+
+class OpenCueSummaryResponse(BaseModel):
+    enabled: bool
+    available: bool
+    summary: RenderStatusSummary
+    last_updated: datetime
+    source: Optional[str]
+    message: Optional[str]
+
+
+class OpenCueJobDetail(BaseModel):
+    id: Optional[str]
+    name: Optional[str]
+    show: Optional[str]
+    shot: Optional[str]
+    layer: Optional[str]
+    user: Optional[str]
+    status: str
+    host: Optional[str]
+    started_at: Optional[datetime]
+    updated_at: Optional[datetime]
+    frame_count: Optional[int]
+    running_frames: Optional[int]
+    succeeded_frames: Optional[int]
+    failed_frames: Optional[int]
+
+
+class OpenCueDetailedResponse(OpenCueSummaryResponse):
+    jobs: List[OpenCueJobDetail] = Field(default_factory=list)

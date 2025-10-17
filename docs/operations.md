@@ -92,6 +92,7 @@ Example cron entry:
 - `docker-compose.yml` provisions Prometheus, node exporter, Redis, the Celery merge worker, and an optional Grafana profile (`docker compose --profile grafana up -d`).
 - Prometheus scrapes FastAPI metrics (`/metrics`), node exporter host data, and the textfile collector fed by `operations_automation.py` and `replica_health_check.sh`. Mount `./observability/textfile` into operations cronjobs when running on Docker hosts.
 - The Ansible `monitoring` role installs the same stack on bare-metal/VMs, writing metrics to `{{ prometheus_textfile_dir }}` and optionally installing Grafana when `monitoring_enable_grafana` is true.
+- When `OPENCUE_HOSTS` is configured and the Python client is installed, the API exposes `/render/opencue/summary` and `/render/opencue/details` so dashboards can surface render queue telemetry. See `docs/opencue-integration.md` for enablement steps.
 
 ## Replica Lifecycle & Integrity Management
 

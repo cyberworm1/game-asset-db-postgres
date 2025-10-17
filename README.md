@@ -12,6 +12,7 @@ This repository provides a PostgreSQL-based database and service stack for manag
 - **Admin & Branch APIs**: FastAPI endpoints now cover project provisioning, branch/shelf management, and permission administration so Helix-equivalent concepts live beyond raw SQL tables.
 - **Storage Planning**: Project storage snapshots to plan for the default 10TB allocation with room to scale.
 - **Operations & Observability**: Docker Compose now includes Redis, a Celery worker, Prometheus, and an optional Grafana profile so runbook automation, replica health logs, and FastAPI metrics flow into dashboards instead of ad-hoc cron emails.
+- **Render Status Integration**: Optional OpenCue module surfaces render queue summaries for artists and detailed job telemetry for administrators.
 - **Tuning**: Guide for performance in high-load scenarios (e.g., during asset uploads for game builds).
 - **Sample Data**: Pre-populated with demo assets, branches, workspaces, and locks for testing.
 
